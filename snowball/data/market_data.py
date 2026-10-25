@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import html
+import hashlib
 import re
+import datetime as dt
 from pathlib import Path
 from typing import Callable
 
@@ -93,7 +95,14 @@ def _download_multpl_dividend_yield(request_get: Callable = http_get) -> pd.Data
         headers={"User-Agent": "stock-simulator/1.0"},
     )
     response.raise_for_status()
-    return parse_multpl_dividend_yield(response.text).set_index("Date")
+    frame = parse_multpl_dividend_yield(response.text).set_index("Date")
+    frame.attrs.update({
+        "source": "Multpl",
+        "source_url": getattr(response, "url", MULTPL_DIVIDEND_URL),
+        "retrieved_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "sha256": hashlib.sha256(response.text.encode("utf-8")).hexdigest(),
+    })
+    return frame
 
 
 def load_sp500_dividend_yield(
@@ -117,9 +126,11 @@ def load_sp500_dividend_yield(
     available = combined["SP500_DIV_YIELD"].dropna().index.to_period("M") if not combined.empty else pd.PeriodIndex([], freq="M")
     missing = required_months.difference(available)
     update_error: Exception | None = None
+    fetched_provenance: dict[str, object] = {}
     if len(missing):
         try:
             fetched = _download_multpl_dividend_yield(request_get=request_get)
+            fetched_provenance = dict(fetched.attrs)
             combined = pd.concat([combined, fetched]).groupby(level=0).last().sort_index()
             try:
                 cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -143,12 +154,15 @@ def load_sp500_dividend_yield(
     result.attrs.update({
         "source": "Multpl",
         "source_url": MULTPL_DIVIDEND_URL,
+        "data_policy": "bundled_snapshot_then_missing_month_refresh",
+        "vintage_mode": "current_history_not_point_in_time",
         "estimate_months": [
             str(period)
             for period in window.index[
                 window["Estimate"].fillna(False).astype(bool).to_numpy()
             ].to_period("M")
         ],
+        **fetched_provenance,
     })
     return result
 
