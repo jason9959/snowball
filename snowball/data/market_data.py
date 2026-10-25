@@ -8,12 +8,14 @@ from pathlib import Path
 from typing import Callable
 
 import pandas as pd
-import requests
+
+from .fred import download_fred_series
+from .http import get as http_get
 
 
 SPREAD_COLUMNS = {
-    "T10Y2Y": "2e2963b9-dc37-455b-8e66-b43a3ed4ff9e",
-    "T10Y3M": "6ee33d8e-45c0-4a5a-b1a4-96574058cb46",
+    "T10Y2Y": "10년-2년 금리차",
+    "T10Y3M": "10년-3개월 금리차",
 }
 PACKAGED_SPREAD_CSV = Path(__file__).with_name("data") / "treasury_spreads_monthly.csv"
 RUNTIME_SPREAD_CSV = Path(".cache") / "treasury_spreads_monthly.csv"
@@ -84,7 +86,7 @@ def _read_dividend_csv(path: Path) -> pd.DataFrame:
     return frame[["SP500_DIV_YIELD", "Estimate", "ObservationDate"]].groupby(level=0).last()
 
 
-def _download_multpl_dividend_yield(request_get: Callable = requests.get) -> pd.DataFrame:
+def _download_multpl_dividend_yield(request_get: Callable = http_get) -> pd.DataFrame:
     response = request_get(
         MULTPL_DIVIDEND_URL,
         timeout=(8, 30),
@@ -100,7 +102,7 @@ def load_sp500_dividend_yield(
     *,
     packaged_path: Path = PACKAGED_DIVIDEND_CSV,
     cache_path: Path = RUNTIME_DIVIDEND_CSV,
-    request_get: Callable = requests.get,
+    request_get: Callable = http_get,
 ) -> pd.Series:
     """Load monthly S&P 500 dividend yield, updating only missing months."""
     start = pd.Timestamp(start_iso).to_period("M").to_timestamp("M")
@@ -126,7 +128,7 @@ def load_sp500_dividend_yield(
                 temp_path.replace(cache_path)
             except OSError:
                 pass
-        except (requests.RequestException, ValueError, OSError) as error:
+        except (ValueError, OSError) as error:
             update_error = error
 
     available = combined["SP500_DIV_YIELD"].dropna().index.to_period("M") if not combined.empty else pd.PeriodIndex([], freq="M")
@@ -171,29 +173,15 @@ def _download_series(
     series_id: str,
     start: pd.Timestamp,
     end: pd.Timestamp,
-    request_get: Callable = requests.get,
+    request_get: Callable = http_get,
 ) -> pd.Series:
-    dataset_id = SPREAD_COLUMNS[series_id]
-    url = f"https://autario.com/api/v1/public/datasets/{dataset_id}/data"
-    response = request_get(
-        url,
-        params={"limit": 20_000, "filter": f"date:gte:{start.date().isoformat()}", "sort": "date:asc"},
-        timeout=(8, 25),
-        headers={"User-Agent": "stock-simulator/1.0"},
+    daily, provenance = download_fred_series(
+        series_id, start, end, request_get=request_get,
     )
-    response.raise_for_status()
-    rows = response.json().get("data", [])
-    if not rows:
-        raise ValueError(f"{series_id} 갱신 응답이 비어 있습니다.")
-    dates = pd.to_datetime([row.get("date") for row in rows], errors="coerce")
-    values = pd.to_numeric(pd.Series([row.get("value") for row in rows]), errors="coerce")
-    daily = pd.Series(values.to_numpy(), index=dates, name=series_id).dropna().sort_index()
-    daily = daily.loc[start:end]
-    if daily.empty:
-        raise ValueError(f"{series_id} 갱신 응답에 요청 기간 데이터가 없습니다.")
     periods = daily.index.to_period("M")
     monthly = daily.groupby(periods).last().dropna()
     monthly.index = monthly.index.to_timestamp("M")
+    monthly.attrs.update(provenance.__dict__)
     return monthly
 
 
@@ -204,7 +192,7 @@ def load_treasury_spreads(
     *,
     packaged_path: Path = PACKAGED_SPREAD_CSV,
     cache_path: Path = RUNTIME_SPREAD_CSV,
-    request_get: Callable = requests.get,
+    request_get: Callable = http_get,
 ) -> dict[str, pd.Series]:
     """Use bundled monthly CSV data and update only missing months on demand.
 
@@ -245,7 +233,7 @@ def load_treasury_spreads(
                     end,
                     request_get=request_get,
                 )
-            except (requests.RequestException, ValueError, OSError) as error:
+            except (ValueError, OSError) as error:
                 update_errors[series_id] = error
                 continue
             updated = updated.combine_first(fetched.to_frame())
