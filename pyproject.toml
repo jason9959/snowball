@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "snowball-portfolio-lab"
+version = "0.1.0"
+description = "Reproducible dynamic portfolio backtesting engine"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=1.26,<3",
+  "pandas>=2.2,<3",
+  "requests>=2.31,<3",
+  "yfinance>=0.2.54,<2",
+]
+
+[project.scripts]
+snowball = "snowball.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["snowball*"]
+
