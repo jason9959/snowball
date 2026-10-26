@@ -24,6 +24,8 @@ streamlit run streamlit_app.py
 ```
 
 Streamlit Cloud의 메인 파일 경로는 `streamlit_app.py`입니다.
+배포 의존성은 `requirements.txt`에 명시되어 있으며, `pyproject.toml`은
+Poetry가 감지되더라도 애플리케이션 자체를 별도 패키지로 설치하지 않도록 설정되어 있습니다.
 
 ## 설계 원칙
 

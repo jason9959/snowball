@@ -17,6 +17,19 @@ dependencies = [
 [project.scripts]
 snowball = "snowball.cli:main"
 
+[tool.poetry]
+# Streamlit Cloud may invoke Poetry when it finds pyproject.toml.  The app is
+# imported directly from the repository root, so Poetry must manage only the
+# dependencies instead of looking for a package named after the distribution.
+package-mode = false
+
+[tool.setuptools]
+include-package-data = true
+
 [tool.setuptools.packages.find]
+where = ["."]
 include = ["snowball*"]
+
+[tool.setuptools.package-data]
+"snowball.data" = ["data/*.csv"]
 
