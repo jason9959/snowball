@@ -189,7 +189,7 @@ PRESETS: dict[str, PortfolioPreset] = {
         defense_relative=S13612, defense_absolute=S13612, defense_same_momentum=True,
         weight_mode="마이너스 절대 모멘텀 수", negative_threshold=5,
         canary_tickers=("SPY", "TIP"), canary_momentum=MomentumSpec("이동평균", 11),
-        canary_decision_percent_digits=1,
+        canary_decision_percent_digits=None,
         market_signals=("S&P500 배당수익률",), dividend_threshold=1.32,
     ),
     "2. 집중투자 공격형": PortfolioPreset(
@@ -201,7 +201,7 @@ PRESETS: dict[str, PortfolioPreset] = {
         defense_mode="상대 & 절대 모멘텀 + 현금 스위치", defense_select_count=1,
         defense_relative=MA6, defense_absolute=MA6,
         canary_tickers=("TIP",), canary_momentum=MomentumSpec("이동평균", 12),
-        canary_decision_percent_digits=1,
+        canary_decision_percent_digits=None,
         market_signals=("장단기 금리차 역전 (10년-3개월)", "S&P500 배당수익률"),
         spread_10y3m=SpreadRule(7, 8, -0.5), dividend_threshold=1.6,
     ),

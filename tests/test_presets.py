@@ -20,7 +20,7 @@ class PresetTests(unittest.TestCase):
         self.assertEqual(preset.attack_select_count, 4)
         self.assertEqual(preset.negative_threshold, 5)
         self.assertEqual(preset.canary_tickers, ("SPY", "TIP"))
-        self.assertEqual(preset.canary_decision_percent_digits, 1)
+        self.assertIsNone(preset.canary_decision_percent_digits)
         self.assertAlmostEqual(preset.dividend_threshold, 1.32)
         self.assertEqual(preset.market_signals, ("S&P500 배당수익률",))
 
@@ -29,7 +29,7 @@ class PresetTests(unittest.TestCase):
         self.assertEqual(preset.attack_tickers, ("QQQ", "SCHD", "VWO"))
         self.assertEqual(preset.attack_select_count, 1)
         self.assertEqual(preset.defense_tickers, ("GLD", "HYG", "PDBC"))
-        self.assertEqual(preset.canary_decision_percent_digits, 1)
+        self.assertIsNone(preset.canary_decision_percent_digits)
         self.assertIsNotNone(preset.spread_10y3m)
         self.assertEqual(preset.spread_10y3m.as_dict(), {"lag": 7, "active": 8, "threshold": -0.5})
         self.assertAlmostEqual(preset.dividend_threshold, 1.6)
