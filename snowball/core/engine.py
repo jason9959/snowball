@@ -527,6 +527,8 @@ def _market_signal_details(
         active = False
         value: float | None = None
         basis = ""
+        threshold: float | None = None
+        source = ""
         if "금리차" in label:
             is_three_month = "10년-3개월" in label
             defaults = {"lag": 7, "active": 8, "threshold": -0.5} if is_three_month else {"lag": 0, "active": 3, "threshold": 0.0}
@@ -581,10 +583,24 @@ def _market_signal_details(
             # to the following month's first-session rebalance without another
             # one-month subtraction.  Subtracting here would create a two-month
             # effective lag (for example, December data at a February trade).
-            observed_date, value = _market_asof(data["SP500_DIV_YIELD"], signal_date)
+            # Monthly observations are stamped on the calendar month-end. If
+            # month-end is a weekend, ``signal_date`` is the preceding Friday;
+            # compare by observation month so that value is not skipped.
+            observation_month_end = signal_date.to_period("M").to_timestamp("M")
+            observed_date, value = _market_asof(
+                data["SP500_DIV_YIELD"], observation_month_end
+            )
             threshold = float(risk.get("dividend_threshold", 1.32))
+            source = str(
+                data["SP500_DIV_YIELD"].attrs.get(
+                    "source", "S&P500 배당수익률 데이터"
+                )
+            )
             active = value < threshold
-            basis = f"현재 {value:.2f}% < 기준 {threshold:.2f}%"
+            basis = (
+                f"현재 {value:.2f}% < 기준 {threshold:.2f}%"
+                f" · 출처 {source}"
+            )
         elif label == "실업률":
             active, current, average = unemployment_state()
             observed_date, _ = _market_asof(monthly(data["UNRATE"]), signal_date)
@@ -625,8 +641,8 @@ def _market_signal_details(
             "원시값": value,
             "위험 판정": bool(active),
             "판정 근거": basis,
-            "임계값": threshold if "금리차" in label else None,
-            "신호 출처": source if "금리차" in label else "",
+            "임계값": threshold,
+            "신호 출처": source,
         })
     return rows
 
