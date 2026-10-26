@@ -45,9 +45,24 @@ def _css() -> None:
         """
         <style>
         .block-container {padding-top: 1.25rem; padding-bottom: 4rem; max-width: 1180px;}
-        div[data-testid="stMetric"] {background:#f7f8fc; border:1px solid #e8eaf2; padding:14px; border-radius:14px;}
         div[data-testid="stVerticalBlockBorderWrapper"] {border-radius:16px;}
         .preset-note {color:#5f6677; font-size:.92rem; margin-top:-.4rem;}
+        .metric-grid {display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:.65rem; margin:.6rem 0 1rem;}
+        .metric-card {background:#f7f8fc; border:1px solid #e8eaf2; padding:.8rem .9rem; border-radius:12px; min-width:0;}
+        .metric-label {color:#555d6e; font-size:.82rem; line-height:1.25; margin-bottom:.32rem;}
+        .metric-value {color:#222735; font-size:1.35rem; line-height:1.2; font-weight:650; white-space:nowrap;}
+        @media (max-width: 640px) {
+          .block-container {padding: .75rem .75rem 4.5rem;}
+          h1 {font-size:1.75rem !important; line-height:1.2 !important;}
+          h2 {font-size:1.35rem !important;}
+          h3 {font-size:1.12rem !important;}
+          p, label, .stMarkdown {font-size:.92rem;}
+          .metric-grid {grid-template-columns:repeat(2,minmax(0,1fr)); gap:.5rem;}
+          .metric-card {padding:.65rem .7rem; border-radius:10px;}
+          .metric-label {font-size:.74rem;}
+          .metric-value {font-size:1.08rem;}
+          div[data-testid="stDataFrame"] {font-size:.78rem;}
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -250,17 +265,34 @@ def _monthly_returns(nav: pd.Series) -> pd.DataFrame:
     return pivot
 
 
+def _return_cell_style(value: object) -> str:
+    """Color monthly returns without matplotlib, which is absent on Cloud."""
+    if pd.isna(value):
+        return ""
+    number = float(value)
+    if number > 0:
+        strength = min(abs(number) / 0.10, 1.0)
+        return f"background-color: rgba(46, 160, 90, {0.10 + strength * 0.30:.3f}); color: #174c2b"
+    if number < 0:
+        strength = min(abs(number) / 0.10, 1.0)
+        return f"background-color: rgba(220, 70, 70, {0.10 + strength * 0.30:.3f}); color: #6f2020"
+    return "background-color: #f4f5f8; color: #4d5565"
+
+
 def _show_results(result: dict, bundle: PriceBundle) -> None:
     metrics = result["metrics"]
     st.header("백테스트 결과")
-    cols = st.columns(6)
     labels = (
         ("누적 수익률", "total_return"), ("연환산 수익률", "cagr"),
         ("연 변동성", "annual_volatility"), ("최대 낙폭", "max_drawdown"),
         ("연 수익률 표준편차", "annual_return_std"), ("최악의 해", "worst_year"),
     )
-    for column, (label, key) in zip(cols, labels):
-        column.metric(label, _percent(metrics[key]))
+    cards = "".join(
+        f'<div class="metric-card"><div class="metric-label">{label}</div>'
+        f'<div class="metric-value">{_percent(metrics[key])}</div></div>'
+        for label, key in labels
+    )
+    st.markdown(f'<div class="metric-grid">{cards}</div>', unsafe_allow_html=True)
     st.caption(f"실제 공통 평가기간: {result['common_start'].date()} ~ {result['common_end'].date()} · 연간 턴오버 {result['annual_turnover']:.2%}")
 
     tabs = st.tabs(("수익률 차트", "손실폭", "월별 수익률", "리밸런싱", "판단 원시값", "적용 설정"))
@@ -279,7 +311,8 @@ def _show_results(result: dict, bundle: PriceBundle) -> None:
         if monthly.empty:
             st.info("월별 수익률을 계산할 기간이 부족합니다.")
         else:
-            st.dataframe(monthly.style.format("{:.2%}").background_gradient(cmap="RdYlGn", axis=None), use_container_width=True)
+            styled = monthly.style.format("{:.2%}").map(_return_cell_style)
+            st.dataframe(styled, use_container_width=True)
     with tabs[3]:
         st.dataframe(result["history"], use_container_width=True, hide_index=True)
     with tabs[4]:

@@ -175,7 +175,7 @@ MA6 = MomentumSpec("이동평균", 6)
 PRESETS: dict[str, PortfolioPreset] = {
     "1. 분산투자 방어형": PortfolioPreset(
         name="1. 분산투자 방어형",
-        attack_tickers=("QQQ", "SOXX", "XLE", "XLK", "XLV", "EDV", "GLD", "PDBC"),
+        attack_tickers=("QQQ", "SOXX", "XLE", "XLK", "XLV", "EDV", "GLD", "DBC"),
         defense_tickers=("BIL", "IEF", "HYG"),
         attack_mode="상대 모멘텀", attack_select_count=4,
         attack_relative=S13612, attack_absolute=S13612,

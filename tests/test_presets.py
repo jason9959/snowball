@@ -16,7 +16,7 @@ class PresetTests(unittest.TestCase):
 
     def test_defensive_research_preset_matches_agreed_definition(self):
         preset = get_preset("1. 분산투자 방어형")
-        self.assertEqual(preset.attack_tickers, ("QQQ", "SOXX", "XLE", "XLK", "XLV", "EDV", "GLD", "PDBC"))
+        self.assertEqual(preset.attack_tickers, ("QQQ", "SOXX", "XLE", "XLK", "XLV", "EDV", "GLD", "DBC"))
         self.assertEqual(preset.attack_select_count, 4)
         self.assertEqual(preset.negative_threshold, 5)
         self.assertEqual(preset.canary_tickers, ("SPY", "TIP"))
