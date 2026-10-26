@@ -576,11 +576,12 @@ def _market_signal_details(
             active = len(observations) == max(1, active_months) and any(spread_value < threshold for _, spread_value in observations)
             basis = f"{lag}개월 지연 {short_label} 금리차 {value:.2f}%p < {threshold:.2f}%p · {active_months}개월 이벤트 창 · 출처 {source}"
         elif label == "S&P500 배당수익률":
-            # Use Multpl's monthly observation (including explicitly marked
-            # estimates) from the following month's decision onward.
-            observed_date, value = _market_asof(
-                data["SP500_DIV_YIELD"], signal_date - pd.DateOffset(months=1)
-            )
+            # The rebalance decision already uses the prior market session as
+            # ``signal_date``.  A month-end observation is therefore available
+            # to the following month's first-session rebalance without another
+            # one-month subtraction.  Subtracting here would create a two-month
+            # effective lag (for example, December data at a February trade).
+            observed_date, value = _market_asof(data["SP500_DIV_YIELD"], signal_date)
             threshold = float(risk.get("dividend_threshold", 1.32))
             active = value < threshold
             basis = f"현재 {value:.2f}% < 기준 {threshold:.2f}%"
