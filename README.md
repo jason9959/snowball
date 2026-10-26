@@ -10,9 +10,9 @@
 - 10년-2년·10년-3개월 금리차 및 S&P500 배당수익률 신호
 - 수정종가·수정시가 기반 리밸런싱
 - 거래비용, 적립식 투자, 리밸런싱 기록과 원시 신호
-- CLI 및 자동 테스트
+- CLI, Streamlit 화면 및 자동 테스트
 
-Streamlit 화면은 계산 엔진의 실사용 검증을 마친 뒤 마지막 단계에서 추가합니다.
+Streamlit 화면은 두 연구 프리셋과 동일한 검증 스키마를 사용하며, 화면 입력값이 계산 엔진 설정에 직접 연결됩니다.
 
 ## 설치 및 테스트
 
@@ -20,7 +20,10 @@ Streamlit 화면은 계산 엔진의 실사용 검증을 마친 뒤 마지막 �
 python -m pip install -e .
 python -m unittest discover -s tests -v
 python -m snowball.cli list-presets
+streamlit run streamlit_app.py
 ```
+
+Streamlit Cloud의 메인 파일 경로는 `streamlit_app.py`입니다.
 
 ## 설계 원칙
 
