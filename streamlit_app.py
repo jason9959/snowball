@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import datetime as dt
+import secrets
+import time
 from dataclasses import replace
 
 import numpy as np
@@ -11,6 +13,7 @@ import streamlit as st
 
 from snowball.core.catalog import US_ETFS, display_name
 from snowball.core.engine import resolve_recent_period
+from snowball.app_state import SavedRun
 from snowball.data.market_data import load_sp500_dividend_yield, load_treasury_spreads
 from snowball.data.prices import PriceBundle, download_yahoo_prices
 from snowball.presets import MomentumSpec, PRESETS, PortfolioPreset, SpreadRule
@@ -249,6 +252,40 @@ def _market_data(signals: tuple[str, ...], start_iso: str, end_iso: str) -> dict
     return result
 
 
+@st.cache_resource(show_spinner=False)
+def _saved_runs() -> dict[str, tuple[float, SavedRun, dict, PriceBundle]]:
+    """Process-local result store keyed only by an opaque, unguessable ID."""
+    return {}
+
+
+def _remember_run(saved: SavedRun, result: dict, bundle: PriceBundle) -> str:
+    store = _saved_runs()
+    now = time.time()
+    # Bound memory use and discard records older than seven days.
+    expired = [key for key, (created, *_rest) in store.items() if now - created > 7 * 24 * 60 * 60]
+    for key in expired:
+        store.pop(key, None)
+    while len(store) >= 20:
+        oldest = min(store, key=lambda key: store[key][0])
+        store.pop(oldest, None)
+    run_id = secrets.token_urlsafe(24)
+    store[run_id] = (now, saved, result, bundle)
+    return run_id
+
+
+def _restore_run(run_id: str | None) -> tuple[SavedRun, dict, PriceBundle] | None:
+    if not run_id or len(run_id) > 128:
+        return None
+    record = _saved_runs().get(run_id)
+    if record is None:
+        return None
+    created, saved, result, bundle = record
+    if time.time() - created > 7 * 24 * 60 * 60:
+        _saved_runs().pop(run_id, None)
+        return None
+    return saved, result, bundle
+
+
 def _percent(value: float) -> str:
     return "-" if not np.isfinite(value) else f"{value:.2%}"
 
@@ -335,10 +372,34 @@ def _show_results(result: dict, bundle: PriceBundle) -> None:
         st.json(config, expanded=False)
 
 
+def _execute(saved: SavedRun) -> tuple[dict, PriceBundle]:
+    saved.validate()
+    warmup = pd.Timestamp(saved.start_date) - pd.DateOffset(months=18)
+    symbols = tuple(dict.fromkeys(saved.preset.symbols + ("QQQ",)))
+    bundle = _prices(symbols, warmup.date().isoformat(), saved.end_date.isoformat())
+    market = _market_data(saved.preset.market_signals, warmup.date().isoformat(), saved.end_date.isoformat())
+    result = run_preset(
+        saved.preset, bundle, market, saved.start_date, saved.end_date,
+        initial_investment=saved.initial_investment,
+        transaction_cost_rate=saved.transaction_cost_rate,
+    )
+    return result, bundle
+
+
 def main() -> None:
     _css()
     st.title("❄️ Snowball Portfolio Lab")
     st.write("연구 프리셋을 불러오거나 조건을 조정해 동적 포트폴리오를 검증합니다.")
+    restore_id = st.query_params.get("run_id")
+    restored = _restore_run(restore_id)
+    if restored is not None and "last_result" not in st.session_state:
+        saved, result, bundle = restored
+        st.session_state.last_result = result
+        st.session_state.last_bundle = bundle
+        st.session_state.last_saved_run = saved
+        if saved.preset.name in PRESETS:
+            st.session_state.preset_name = saved.preset.name
+
     preset_name = _preset_buttons()
     base = PRESETS[preset_name]
     start_date, end_date = _period_controls()
@@ -361,22 +422,25 @@ def main() -> None:
         except ValueError as error:
             st.error(str(error))
             return
-        warmup = pd.Timestamp(start_date) - pd.DateOffset(months=18)
-        symbols = tuple(dict.fromkeys(edited.symbols + ("QQQ",)))
+        saved = SavedRun(
+            preset=edited,
+            start_date=start_date,
+            end_date=end_date,
+            initial_investment=initial,
+            transaction_cost_rate=cost_bps / 10_000.0,
+        )
         try:
             with st.spinner("가격과 시장 데이터를 불러와 계산하고 있습니다…"):
-                bundle = _prices(symbols, warmup.date().isoformat(), end_date.isoformat())
-                market = _market_data(edited.market_signals, warmup.date().isoformat(), end_date.isoformat())
-                result = run_preset(
-                    edited, bundle, market, start_date, end_date,
-                    initial_investment=initial, transaction_cost_rate=cost_bps / 10_000.0,
-                )
+                result, bundle = _execute(saved)
             st.session_state.last_result = result
             st.session_state.last_bundle = bundle
+            st.session_state.last_saved_run = saved
+            st.query_params["run_id"] = _remember_run(saved, result, bundle)
         except Exception as error:  # Streamlit must turn provider failures into actionable UI feedback.
             st.error(f"백테스트를 완료하지 못했습니다: {error}")
 
     if "last_result" in st.session_state:
+        st.caption("마지막 결과는 새로고침하거나 이 탭을 다시 열어도 자동으로 복원됩니다.")
         _show_results(st.session_state.last_result, st.session_state.last_bundle)
 
 
