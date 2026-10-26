@@ -444,13 +444,25 @@ def _apply_canary_overlay(
                 f"확보 기간: {available}"
             ) from error
         value = float(detail["계산값"])
-        danger = value < 0 if direction == "마이너스(-)" else value > 0
+        decision_digits = risk.get("decision_percent_digits")
+        if decision_digits is None:
+            decision_value = value
+        else:
+            rounded_percent = round(value * 100.0, int(decision_digits))
+            # Normalize negative zero so the audit and sign test are explicit.
+            decision_value = 0.0 if rounded_percent == 0.0 else rounded_percent / 100.0
+        danger = decision_value < 0 if direction == "마이너스(-)" else decision_value > 0
         audit.append(
             {
                 "티커": ticker,
                 "산출 기준": momentum.kind,
                 "기준 기간": detail.get("기준 기간", "-"),
                 "모멘텀 값": value,
+                "판정값": decision_value,
+                "판정 반올림": (
+                    "미사용" if decision_digits is None
+                    else f"퍼센트 소수점 {int(decision_digits)}자리"
+                ),
                 "위험 판정": danger,
                 "데이터 유효": True,
             }

@@ -65,6 +65,9 @@ class PortfolioPreset:
     canary_momentum_type: str = "절대 모멘텀"
     canary_same_momentum: bool = False
     canary_momentum: MomentumSpec = field(default_factory=lambda: MomentumSpec("이동평균", 12))
+    # Number of decimal places retained after converting the canary signal to
+    # percentage points. ``None`` restores the original raw-value decision.
+    canary_decision_percent_digits: int | None = None
     market_combine: str = "OR"
     market_signals: tuple[str, ...] = ()
     spread_10y2y: SpreadRule | None = None
@@ -85,6 +88,8 @@ class PortfolioPreset:
             raise ValueError(f"{self.name}: 방어자산 선택 수가 후보군 범위를 벗어났습니다.")
         if not 0.0 <= self.fixed_defense_weight <= 1.0:
             raise ValueError("고정 방어 비중은 0~1 범위여야 합니다.")
+        if self.canary_decision_percent_digits is not None and not 0 <= self.canary_decision_percent_digits <= 6:
+            raise ValueError("카나리아 판정 반올림 자릿수는 0~6 또는 None이어야 합니다.")
         if self.weight_mode == "마이너스 절대 모멘텀 수" and not 1 <= self.negative_threshold <= len(self.attack_tickers):
             raise ValueError(f"{self.name}: 마이너스 절대 모멘텀 기준 수가 잘못됐습니다.")
         normalize_market_signals(list(self.market_signals))
@@ -152,6 +157,7 @@ class PortfolioPreset:
                 "momentum_type": self.canary_momentum_type,
                 "same_momentum": self.canary_same_momentum,
                 "custom_momentum": self.canary_momentum.build(),
+                "decision_percent_digits": self.canary_decision_percent_digits,
             },
             "market_risk": {
                 "enabled": bool(self.market_signals),
@@ -183,6 +189,7 @@ PRESETS: dict[str, PortfolioPreset] = {
         defense_relative=S13612, defense_absolute=S13612, defense_same_momentum=True,
         weight_mode="마이너스 절대 모멘텀 수", negative_threshold=5,
         canary_tickers=("SPY", "TIP"), canary_momentum=MomentumSpec("이동평균", 11),
+        canary_decision_percent_digits=1,
         market_signals=("S&P500 배당수익률",), dividend_threshold=1.32,
     ),
     "2. 집중투자 공격형": PortfolioPreset(
@@ -194,6 +201,7 @@ PRESETS: dict[str, PortfolioPreset] = {
         defense_mode="상대 & 절대 모멘텀 + 현금 스위치", defense_select_count=1,
         defense_relative=MA6, defense_absolute=MA6,
         canary_tickers=("TIP",), canary_momentum=MomentumSpec("이동평균", 12),
+        canary_decision_percent_digits=1,
         market_signals=("장단기 금리차 역전 (10년-3개월)", "S&P500 배당수익률"),
         spread_10y3m=SpreadRule(7, 8, -0.5), dividend_threshold=1.6,
     ),

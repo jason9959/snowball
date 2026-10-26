@@ -166,6 +166,14 @@ def _strategy_controls(base: PortfolioPreset) -> PortfolioPreset:
             ))
             canary_momentum = _momentum_editor("카나리아 모멘텀", base.canary_momentum, f"{prefix}_canary_momentum")
             st.caption("방어형: 하나라도 위험이면 공격자산을 100% 방어자산으로 전환합니다.")
+            if base.canary_decision_percent_digits is None:
+                st.caption("카나리아 부호는 반올림하지 않은 원시값으로 판정합니다.")
+            else:
+                st.caption(
+                    f"카나리아 원시값을 보존하고, 퍼센트 소수점 "
+                    f"{base.canary_decision_percent_digits + 1}자리에서 반올림한 "
+                    f"{base.canary_decision_percent_digits}자리 값을 부호 판정에 사용합니다."
+                )
 
     with st.container(border=True):
         st.subheader("🚩 위험 회피 옵션 B · 시장 데이터")
