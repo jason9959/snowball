@@ -24,12 +24,13 @@ from snowball.data.market_data import (
 from snowball.data.prices import PriceBundle, download_yahoo_prices
 from snowball.exports import diagnostic_frames, diagnostic_zip
 from snowball.presets import MomentumSpec, PRESETS, PortfolioPreset, SpreadRule
-from snowball.service import run_preset
+from snowball.service import run_blended_presets, run_preset
 
 
 st.set_page_config(page_title="Snowball Portfolio Lab", page_icon="❄️", layout="wide")
 
 PRESET_NAMES = tuple(PRESETS)
+COMBINED_PRESET_NAME = "3. 프리셋 결합"
 MOMENTUM_KINDS = ("수익률", "이동평균", "모멘텀 스코어")
 SCORE_TYPES = (
     "1-3-6개월 단순", "3-6-12개월 단순", "1-3-6-12개월 단순",
@@ -106,13 +107,17 @@ def _asset_options(extra: tuple[str, ...] = ()) -> list[str]:
 
 def _preset_buttons() -> str:
     st.subheader("연구 포트폴리오 불러오기")
-    left, right = st.columns(2)
+    left, center, right = st.columns(3)
     if left.button("1. 분산투자 방어형", use_container_width=True, type="primary" if st.session_state.get("preset_name", PRESET_NAMES[0]) == PRESET_NAMES[0] else "secondary"):
         st.session_state.preset_name = PRESET_NAMES[0]
         st.session_state.form_version = st.session_state.get("form_version", 0) + 1
         st.rerun()
-    if right.button("2. 집중투자 공격형", use_container_width=True, type="primary" if st.session_state.get("preset_name", PRESET_NAMES[0]) == PRESET_NAMES[1] else "secondary"):
+    if center.button("2. 집중투자 공격형", use_container_width=True, type="primary" if st.session_state.get("preset_name", PRESET_NAMES[0]) == PRESET_NAMES[1] else "secondary"):
         st.session_state.preset_name = PRESET_NAMES[1]
+        st.session_state.form_version = st.session_state.get("form_version", 0) + 1
+        st.rerun()
+    if right.button("3. 프리셋 결합", use_container_width=True, type="primary" if st.session_state.get("preset_name", PRESET_NAMES[0]) == COMBINED_PRESET_NAME else "secondary"):
+        st.session_state.preset_name = COMBINED_PRESET_NAME
         st.session_state.form_version = st.session_state.get("form_version", 0) + 1
         st.rerun()
     selected = st.session_state.get("preset_name", PRESET_NAMES[0])
@@ -509,15 +514,26 @@ def _show_results(result: dict, bundle: PriceBundle) -> None:
 def _execute(saved: SavedRun) -> tuple[dict, PriceBundle]:
     saved.validate()
     warmup = pd.Timestamp(saved.start_date) - pd.DateOffset(months=18)
-    symbols = tuple(dict.fromkeys(saved.preset.symbols + ("QQQ",)))
+    secondary_symbols = saved.secondary_preset.symbols if saved.secondary_preset is not None else ()
+    symbols = tuple(dict.fromkeys(saved.preset.symbols + secondary_symbols + ("QQQ",)))
     bundle = _prices(symbols, warmup.date().isoformat(), saved.end_date.isoformat())
     market_mode = getattr(saved, "market_data_mode", "fixed")
-    market = _market_data(saved.preset.market_signals, warmup.date().isoformat(), saved.end_date.isoformat(), market_mode)
-    result = run_preset(
-        saved.preset, bundle, market, saved.start_date, saved.end_date,
-        initial_investment=saved.initial_investment,
-        transaction_cost_rate=saved.transaction_cost_rate,
-    )
+    secondary_signals = saved.secondary_preset.market_signals if saved.secondary_preset is not None else ()
+    signals = tuple(dict.fromkeys(saved.preset.market_signals + secondary_signals))
+    market = _market_data(signals, warmup.date().isoformat(), saved.end_date.isoformat(), market_mode)
+    if saved.secondary_preset is None:
+        result = run_preset(
+            saved.preset, bundle, market, saved.start_date, saved.end_date,
+            initial_investment=saved.initial_investment,
+            transaction_cost_rate=saved.transaction_cost_rate,
+        )
+    else:
+        result = run_blended_presets(
+            saved.preset, saved.secondary_preset, saved.preset1_weight,
+            bundle, market, saved.start_date, saved.end_date,
+            initial_investment=saved.initial_investment,
+            transaction_cost_rate=saved.transaction_cost_rate,
+        )
     price_hash = hashlib.sha256(
         pd.util.hash_pandas_object(bundle.adjusted_close, index=True).values.tobytes()
         + pd.util.hash_pandas_object(bundle.adjusted_open, index=True).values.tobytes()
@@ -545,15 +561,32 @@ def main() -> None:
         st.session_state.last_result = result
         st.session_state.last_bundle = bundle
         st.session_state.last_saved_run = saved
-        if saved.preset.name in PRESETS:
+        if saved.secondary_preset is not None:
+            st.session_state.preset_name = COMBINED_PRESET_NAME
+            st.session_state.combined_preset1_weight = int(round(saved.preset1_weight * 100))
+        elif saved.preset.name in PRESETS:
             st.session_state.preset_name = saved.preset.name
 
     preset_name = _preset_buttons()
-    base = PRESETS[preset_name]
     start_date, end_date = _period_controls()
-
-    with st.expander("전략 조건 편집", expanded=True):
-        edited = _strategy_controls(base)
+    combined_weight = 50
+    if preset_name == COMBINED_PRESET_NAME:
+        with st.container(border=True):
+            st.subheader("⚖️ 결합 비율")
+            combined_weight = int(st.number_input(
+                "프리셋 1 비중(%)", min_value=0, max_value=100,
+                value=50, step=5,
+                key="combined_preset1_weight",
+            ))
+            st.caption(
+                f"프리셋 1 {combined_weight}% + 프리셋 2 {100 - combined_weight}%로 "
+                "각 전략의 리밸런싱 종목과 일별 성과를 결합합니다."
+            )
+        edited = PRESETS[PRESET_NAMES[0]]
+    else:
+        base = PRESETS[preset_name]
+        with st.expander("전략 조건 편집", expanded=True):
+            edited = _strategy_controls(base)
 
     with st.container(border=True):
         st.subheader("⚙️ 기본 설정")
@@ -583,6 +616,8 @@ def main() -> None:
             initial_investment=initial,
             transaction_cost_rate=cost_bps / 10_000.0,
             market_data_mode=MARKET_DATA_MODES[mode_label],
+            secondary_preset=PRESETS[PRESET_NAMES[1]] if preset_name == COMBINED_PRESET_NAME else None,
+            preset1_weight=combined_weight / 100.0 if preset_name == COMBINED_PRESET_NAME else 1.0,
         )
         try:
             with st.spinner("가격과 시장 데이터를 불러와 계산하고 있습니다…"):

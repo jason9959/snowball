@@ -38,3 +38,229 @@ def run_preset(
     result["preset_name"] = preset.name
     result["engine_config"] = config
     return result
+
+
+def _scaled_selection(selection: object, scale: float) -> dict[str, float]:
+    """Convert an engine selection string into whole-portfolio weights."""
+    weights: dict[str, float] = {}
+    if not isinstance(selection, str):
+        return weights
+    for item in selection.split(", "):
+        try:
+            ticker, percent = item.rsplit(" ", 1)
+            weight = float(percent.rstrip("%")) / 100.0 * scale
+        except (ValueError, AttributeError):
+            continue
+        weights[ticker] = weights.get(ticker, 0.0) + weight
+    return weights
+
+
+def _blend_history(first: pd.DataFrame, second: pd.DataFrame, first_weight: float) -> pd.DataFrame:
+    second_weight = 1.0 - first_weight
+    left = first.add_prefix("프리셋 1 · ")
+    right = second.add_prefix("프리셋 2 · ")
+    left["적용일"] = first["적용일"].astype(str).to_numpy()
+    right["적용일"] = second["적용일"].astype(str).to_numpy()
+    merged = left.merge(right, on="적용일", how="outer", sort=True)
+    rows: list[dict[str, object]] = []
+    for _, source in merged.iterrows():
+        combined: dict[str, float] = {}
+        for ticker, weight in _scaled_selection(source.get("프리셋 1 · 선택된 종목"), first_weight).items():
+            combined[ticker] = combined.get(ticker, 0.0) + weight
+        for ticker, weight in _scaled_selection(source.get("프리셋 2 · 선택된 종목"), second_weight).items():
+            combined[ticker] = combined.get(ticker, 0.0) + weight
+        selected = ", ".join(
+            f"{ticker} {weight:.1%}" for ticker, weight in combined.items() if weight > 1e-12
+        )
+        rows.append({
+            "예정일": source.get("프리셋 1 · 예정일", source.get("프리셋 2 · 예정일")),
+            "적용일": source["적용일"],
+            "판단 기준일": source.get("프리셋 1 · 판단 기준일", source.get("프리셋 2 · 판단 기준일")),
+            "선택된 종목": selected,
+            "프리셋 1 비중": first_weight,
+            "프리셋 1 선택": source.get("프리셋 1 · 선택된 종목", "-"),
+            "프리셋 2 비중": second_weight,
+            "프리셋 2 선택": source.get("프리셋 2 · 선택된 종목", "-"),
+            "턴오버": (
+                first_weight * float(source.get("프리셋 1 · 턴오버", 0.0) or 0.0)
+                + second_weight * float(source.get("프리셋 2 · 턴오버", 0.0) or 0.0)
+            ),
+            "거래비용": (
+                first_weight * float(source.get("프리셋 1 · 거래비용", 0.0) or 0.0)
+                + second_weight * float(source.get("프리셋 2 · 거래비용", 0.0) or 0.0)
+            ),
+            "평가금액": (
+                first_weight * float(source.get("프리셋 1 · 평가금액", 0.0) or 0.0)
+                + second_weight * float(source.get("프리셋 2 · 평가금액", 0.0) or 0.0)
+            ),
+        })
+    return pd.DataFrame(rows)
+
+
+def _blend_snapshots(
+    first: dict[str, pd.DataFrame], second: dict[str, pd.DataFrame],
+) -> dict[str, pd.DataFrame]:
+    combined: dict[str, pd.DataFrame] = {}
+    for date in sorted(set(first) | set(second)):
+        frames = []
+        for label, source in (("프리셋 1", first), ("프리셋 2", second)):
+            frame = source.get(date)
+            if frame is None or frame.empty:
+                continue
+            copy = frame.copy()
+            copy.insert(0, "구성 전략", label)
+            frames.append(copy)
+        combined[date] = pd.concat(frames, ignore_index=True, sort=False) if frames else pd.DataFrame()
+    return combined
+
+
+def _display_config(config: dict) -> dict:
+    copy = dict(config)
+    copy.pop("execution_prices", None)
+    copy.pop("_market_data", None)
+    return copy
+
+
+def _simulate_blended_portfolio(
+    history: pd.DataFrame,
+    prices: PriceBundle,
+    evaluation_index: pd.DatetimeIndex,
+    initial_investment: float,
+    transaction_cost_rate: float,
+) -> tuple[pd.Series, pd.Series, pd.DataFrame, float]:
+    """Trade the merged target weights at adjusted open and value at adjusted close."""
+    targets: dict[pd.Timestamp, dict[str, float]] = {}
+    for _, row in history.iterrows():
+        targets[pd.Timestamp(row["적용일"])] = _scaled_selection(row["선택된 종목"], 1.0)
+    used_tickers = sorted({ticker for weights in targets.values() for ticker in weights if ticker != "현금"})
+    close = prices.adjusted_close.reindex(evaluation_index)[used_tickers].ffill()
+    open_price = prices.adjusted_open.reindex(evaluation_index)[used_tickers].ffill()
+    shares = pd.Series(0.0, index=used_tickers)
+    cash = float(initial_investment)
+    values: list[float] = []
+    returns: list[float] = []
+    turnover_sum = 0.0
+    history = history.copy()
+    row_by_date = {pd.Timestamp(value): index for index, value in history["적용일"].items()}
+
+    for date in evaluation_index:
+        if date in targets:
+            target = targets[date]
+            execution = open_price.loc[date]
+            if execution.isna().any() or (execution <= 0).any():
+                raise ValueError(f"{date.date()}의 결합 포트폴리오 수정 시가 데이터가 부족합니다.")
+            current_values = shares * execution
+            before_value = float(current_values.sum() + cash)
+            current_weights = {
+                ticker: float(value / before_value) for ticker, value in current_values.items()
+            }
+            current_weights["현금"] = cash / before_value if before_value else 0.0
+            all_assets = set(current_weights) | set(target)
+            turnover = 0.5 * sum(
+                abs(target.get(asset, 0.0) - current_weights.get(asset, 0.0))
+                for asset in all_assets
+            )
+            if date != evaluation_index[0]:
+                turnover_sum += turnover
+            gross_trade = sum(
+                abs(before_value * target.get(ticker, 0.0) - current_values.get(ticker, 0.0))
+                for ticker in used_tickers
+            )
+            fee = gross_trade * transaction_cost_rate
+            investable = max(0.0, before_value - fee)
+            for ticker in used_tickers:
+                shares[ticker] = investable * target.get(ticker, 0.0) / float(execution[ticker])
+            cash = investable * target.get("현금", 0.0)
+            after_value = float((shares * close.loc[date]).sum() + cash)
+            history_index = row_by_date[date]
+            history.at[history_index, "턴오버"] = 0.0 if date == evaluation_index[0] else turnover
+            history.at[history_index, "거래비용"] = fee
+            history.at[history_index, "평가금액"] = after_value
+        else:
+            after_value = float((shares * close.loc[date]).sum() + cash)
+        period_return = (
+            after_value / initial_investment - 1.0
+            if not values else after_value / values[-1] - 1.0
+        )
+        values.append(after_value)
+        returns.append(period_return)
+
+    value_series = pd.Series(values, index=evaluation_index, name="포트폴리오 평가액")
+    nav = (1.0 + pd.Series(returns, index=evaluation_index).fillna(0.0)).cumprod().rename("포트폴리오")
+    years = max((evaluation_index[-1] - evaluation_index[0]).days / 365.25, 1 / 365.25)
+    return nav, value_series, history, turnover_sum / years
+
+
+def run_blended_presets(
+    first: PortfolioPreset,
+    second: PortfolioPreset,
+    first_weight: float,
+    prices: PriceBundle,
+    market_data: Mapping[str, pd.Series],
+    start_date: dt.date,
+    end_date: dt.date,
+    *,
+    initial_investment: float = 10_000.0,
+    transaction_cost_rate: float = 0.0,
+) -> dict:
+    """Run two independent sleeves and combine their daily values and holdings."""
+    if not 0 <= first_weight <= 1:
+        raise ValueError("프리셋 1 비중은 0% 이상 100% 이하여야 합니다.")
+    second_weight = 1.0 - first_weight
+    first_result = run_preset(
+        first, prices, market_data, start_date, end_date,
+        initial_investment=initial_investment,
+        transaction_cost_rate=transaction_cost_rate,
+    )
+    second_result = run_preset(
+        second, prices, market_data, start_date, end_date,
+        initial_investment=initial_investment,
+        transaction_cost_rate=transaction_cost_rate,
+    )
+    navs = pd.concat(
+        [first_result["nav"].rename("first"), second_result["nav"].rename("second")],
+        axis=1, join="inner",
+    ).dropna()
+    history = _blend_history(first_result["history"], second_result["history"], first_weight)
+    nav, blended_values, history, annual_turnover = _simulate_blended_portfolio(
+        history, prices, navs.index, initial_investment, transaction_cost_rate,
+    )
+    drawdown = (nav / nav.cummax() - 1.0).rename("포트폴리오")
+    final_weights: dict[str, float] = {}
+    for scale, result in ((first_weight, first_result), (second_weight, second_result)):
+        for ticker, weight in result["final_weights"].items():
+            final_weights[ticker] = final_weights.get(ticker, 0.0) + scale * weight
+
+    result = {
+        "values": blended_values,
+        "invested": pd.Series(initial_investment, index=nav.index, name="누적 투입금"),
+        "flows": pd.Series(0.0, index=nav.index, name="외부 현금흐름"),
+        "nav": nav,
+        "drawdown": drawdown,
+        "history": history,
+        "candidate_snapshots": _blend_snapshots(
+            first_result["candidate_snapshots"], second_result["candidate_snapshots"],
+        ),
+        "canary_audits": _blend_snapshots(
+            first_result["canary_audits"], second_result["canary_audits"],
+        ),
+        "market_audits": _blend_snapshots(
+            first_result["market_audits"], second_result["market_audits"],
+        ),
+        "final_weights": final_weights,
+        "annual_turnover": annual_turnover,
+        "common_start": nav.index[0],
+        "common_end": nav.index[-1],
+        "preset_name": "3. 프리셋 결합",
+        "metrics": summarize_nav(nav),
+        "engine_config": {
+            "전략": "프리셋 1 + 프리셋 2 혼합",
+            "프리셋 1 비중": first_weight,
+            "프리셋 2 비중": second_weight,
+            "프리셋 1": _display_config(first_result["engine_config"]),
+            "프리셋 2": _display_config(second_result["engine_config"]),
+            "_market_data": dict(market_data),
+        },
+        "component_results": {"프리셋 1": first_result, "프리셋 2": second_result},
+    }
+    return result
