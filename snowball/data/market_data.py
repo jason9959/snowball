@@ -24,6 +24,15 @@ RUNTIME_SPREAD_CSV = Path(".cache") / "treasury_spreads_monthly.csv"
 MULTPL_DIVIDEND_URL = "https://www.multpl.com/s-p-500-dividend-yield/table/by-month"
 PACKAGED_DIVIDEND_CSV = Path(__file__).with_name("data") / "sp500_dividend_yield_monthly.csv"
 RUNTIME_DIVIDEND_CSV = Path(".cache") / "sp500_dividend_yield_monthly.csv"
+SNAPSHOT_MODES = {"fixed", "latest", "refresh_missing"}
+
+
+def _file_snapshot_id(path: Path, label: str) -> str:
+    """Return a stable identifier for a bundled or cached data file."""
+    if not path.exists():
+        return f"{label}-missing"
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()[:12]
+    return f"{label}-{digest}"
 
 
 def parse_multpl_dividend_yield(html_text: str) -> pd.DataFrame:
@@ -105,6 +114,44 @@ def _download_multpl_dividend_yield(request_get: Callable = http_get) -> pd.Data
     return frame
 
 
+def download_latest_sp500_dividend_snapshot(
+    request_get: Callable = http_get,
+) -> pd.DataFrame:
+    """Download a candidate snapshot without replacing the bundled baseline."""
+    return _download_multpl_dividend_yield(request_get=request_get)
+
+
+def compare_dividend_snapshots(
+    baseline: pd.DataFrame | pd.Series,
+    candidate: pd.DataFrame | pd.Series,
+    start_iso: str,
+    end_iso: str,
+) -> pd.DataFrame:
+    """Compare two dividend vintages by month for display and CSV export."""
+    def values(data: pd.DataFrame | pd.Series) -> pd.Series:
+        if isinstance(data, pd.DataFrame):
+            series = data["SP500_DIV_YIELD"]
+        else:
+            series = data
+        series = pd.to_numeric(series, errors="coerce").dropna().sort_index()
+        series.index = pd.DatetimeIndex(series.index).to_period("M").to_timestamp("M")
+        return series.groupby(level=0).last()
+
+    start = pd.Timestamp(start_iso).to_period("M").to_timestamp("M")
+    end = pd.Timestamp(end_iso).to_period("M").to_timestamp("M")
+    joined = pd.concat(
+        [values(baseline).rename("고정 스냅샷"), values(candidate).rename("최신 공급원")],
+        axis=1,
+    ).loc[start:end]
+    joined["차이"] = joined["최신 공급원"] - joined["고정 스냅샷"]
+    joined["상태"] = "동일"
+    joined.loc[joined["고정 스냅샷"].isna(), "상태"] = "신규"
+    joined.loc[joined["최신 공급원"].isna(), "상태"] = "최신값 없음"
+    changed = joined[["고정 스냅샷", "최신 공급원"]].notna().all(axis=1) & joined["차이"].abs().gt(1e-12)
+    joined.loc[changed, "상태"] = "변경"
+    return joined.rename_axis("관측 월").reset_index()
+
+
 def load_sp500_dividend_yield(
     start_iso: str,
     end_iso: str,
@@ -112,22 +159,28 @@ def load_sp500_dividend_yield(
     packaged_path: Path = PACKAGED_DIVIDEND_CSV,
     cache_path: Path = RUNTIME_DIVIDEND_CSV,
     request_get: Callable = http_get,
+    mode: str = "refresh_missing",
 ) -> pd.Series:
-    """Load monthly S&P 500 dividend yield, updating only missing months."""
+    """Load monthly S&P 500 dividend yield from a fixed or latest vintage."""
+    if mode not in SNAPSHOT_MODES:
+        raise ValueError(f"지원하지 않는 스냅샷 모드: {mode}")
     start = pd.Timestamp(start_iso).to_period("M").to_timestamp("M")
     end = pd.Timestamp(end_iso).to_period("M").to_timestamp("M")
     required_months = pd.period_range(start, end, freq="M")
     packaged = _read_dividend_csv(packaged_path)
-    try:
-        cached = _read_dividend_csv(cache_path)
-    except (ValueError, OSError, pd.errors.ParserError):
-        cached = pd.DataFrame(columns=["SP500_DIV_YIELD", "Estimate", "ObservationDate"])
-    combined = pd.concat([packaged, cached]).groupby(level=0).last().sort_index()
+    cached = pd.DataFrame(columns=["SP500_DIV_YIELD", "Estimate", "ObservationDate"])
+    if mode != "fixed":
+        try:
+            cached = _read_dividend_csv(cache_path)
+        except (ValueError, OSError, pd.errors.ParserError):
+            pass
+    combined = packaged.copy() if mode == "fixed" else pd.concat([packaged, cached]).groupby(level=0).last().sort_index()
     available = combined["SP500_DIV_YIELD"].dropna().index.to_period("M") if not combined.empty else pd.PeriodIndex([], freq="M")
     missing = required_months.difference(available)
     update_error: Exception | None = None
     fetched_provenance: dict[str, object] = {}
-    if len(missing):
+    should_fetch = mode == "latest" or (mode == "refresh_missing" and len(missing))
+    if should_fetch:
         try:
             fetched = _download_multpl_dividend_yield(request_get=request_get)
             fetched_provenance = dict(fetched.attrs)
@@ -137,6 +190,14 @@ def load_sp500_dividend_yield(
                 temp_path = cache_path.with_suffix(".tmp")
                 combined.rename_axis("Date").reset_index().to_csv(temp_path, index=False, date_format="%Y-%m-%d")
                 temp_path.replace(cache_path)
+                snapshot_dir = cache_path.parent / "snapshots"
+                snapshot_dir.mkdir(parents=True, exist_ok=True)
+                snapshot_hash = str(fetched.attrs.get("sha256", "unknown"))[:12]
+                version_path = snapshot_dir / f"sp500_dividend_yield_{snapshot_hash}.csv"
+                if not version_path.exists():
+                    fetched.rename_axis("Date").reset_index().to_csv(
+                        version_path, index=False, date_format="%Y-%m-%d",
+                    )
             except OSError:
                 pass
         except (ValueError, OSError) as error:
@@ -147,15 +208,32 @@ def load_sp500_dividend_yield(
     if len(unresolved):
         months = ", ".join(str(month) for month in unresolved[:6])
         suffix = f" Multpl 업데이트 실패: {update_error}" if update_error else ""
-        raise ValueError(f"배당수익률 CSV에서 필요한 월을 확보하지 못했습니다 ({months}).{suffix}")
+        mode_hint = " 최신 데이터 모드로 다시 실행할 수 있습니다." if mode == "fixed" else ""
+        raise ValueError(f"배당수익률 CSV에서 필요한 월을 확보하지 못했습니다 ({months}).{suffix}{mode_hint}")
 
     window = combined.loc[start:end]
     result = window["SP500_DIV_YIELD"].astype(float).rename("SP500_DIV_YIELD")
     result.attrs.update({
         "source": "Multpl",
         "source_url": MULTPL_DIVIDEND_URL,
-        "data_policy": "bundled_snapshot_then_missing_month_refresh",
+        "snapshot_id": (
+            f"multpl-{str(fetched_provenance.get('sha256'))[:12]}"
+            if fetched_provenance.get("sha256")
+            else _file_snapshot_id(packaged_path, "bundled-dividend")
+        ),
+        "data_policy": {
+            "fixed": "bundled_snapshot_only",
+            "latest": "latest_candidate_over_bundled_snapshot",
+            "refresh_missing": "bundled_snapshot_then_missing_month_refresh",
+        }[mode],
+        "snapshot_mode": mode,
         "vintage_mode": "current_history_not_point_in_time",
+        "observation_dates": {
+            str(index.to_period("M")): (
+                None if pd.isna(value) else pd.Timestamp(value).date().isoformat()
+            )
+            for index, value in window["ObservationDate"].items()
+        },
         "estimate_months": [
             str(period)
             for period in window.index[
@@ -207,12 +285,15 @@ def load_treasury_spreads(
     packaged_path: Path = PACKAGED_SPREAD_CSV,
     cache_path: Path = RUNTIME_SPREAD_CSV,
     request_get: Callable = http_get,
+    mode: str = "refresh_missing",
 ) -> dict[str, pd.Series]:
     """Use bundled monthly CSV data and update only missing months on demand.
 
     Runtime cache writes are best-effort because Streamlit Cloud storage is
     ephemeral.  The bundled CSV remains the deterministic baseline.
     """
+    if mode not in SNAPSHOT_MODES:
+        raise ValueError(f"지원하지 않는 스냅샷 모드: {mode}")
     requested = set(series_ids) & set(SPREAD_COLUMNS)
     if not requested:
         return {}
@@ -221,13 +302,15 @@ def load_treasury_spreads(
     required_months = pd.period_range(start, end, freq="M")
 
     packaged = _read_spread_csv(packaged_path)
-    try:
-        cached = _read_spread_csv(cache_path)
-    except (ValueError, OSError, pd.errors.ParserError):
-        # A Streamlit instance can stop while replacing its ephemeral cache.
-        # A damaged runtime cache must never invalidate the bundled baseline.
-        cached = pd.DataFrame(columns=list(SPREAD_COLUMNS), dtype=float)
-    combined = pd.concat([packaged, cached]).groupby(level=0).last().sort_index()
+    cached = pd.DataFrame(columns=list(SPREAD_COLUMNS), dtype=float)
+    if mode != "fixed":
+        try:
+            cached = _read_spread_csv(cache_path)
+        except (ValueError, OSError, pd.errors.ParserError):
+            # A Streamlit instance can stop while replacing its ephemeral cache.
+            # A damaged runtime cache must never invalidate the bundled baseline.
+            pass
+    combined = packaged.copy() if mode == "fixed" else pd.concat([packaged, cached]).groupby(level=0).last().sort_index()
 
     def missing_for(series_id: str) -> pd.PeriodIndex:
         available = combined[series_id].dropna().index.to_period("M")
@@ -235,21 +318,27 @@ def load_treasury_spreads(
 
     missing_before = {series_id: missing_for(series_id) for series_id in requested}
     update_errors: dict[str, Exception] = {}
-    if any(len(months) for months in missing_before.values()):
+    fetched_provenance: dict[str, dict[str, object]] = {}
+    should_update = mode == "latest" or (
+        mode == "refresh_missing" and any(len(months) for months in missing_before.values())
+    )
+    if should_update:
         updated = combined.copy()
-        for series_id, months in missing_before.items():
-            if not len(months):
+        for series_id in requested:
+            months = missing_before[series_id]
+            if mode != "latest" and not len(months):
                 continue
             try:
                 fetched = _download_series(
                     series_id,
-                    months.min().to_timestamp(how="start"),
+                    start if mode == "latest" else months.min().to_timestamp(how="start"),
                     end,
                     request_get=request_get,
                 )
             except (ValueError, OSError) as error:
                 update_errors[series_id] = error
                 continue
+            fetched_provenance[series_id] = dict(fetched.attrs)
             updated = updated.combine_first(fetched.to_frame())
             updated.loc[fetched.index, series_id] = fetched
         combined = updated.sort_index()
@@ -258,6 +347,20 @@ def load_treasury_spreads(
             temp_path = cache_path.with_suffix(".tmp")
             combined.rename_axis("Date").reset_index().to_csv(temp_path, index=False, date_format="%Y-%m-%d")
             temp_path.replace(cache_path)
+            if fetched_provenance:
+                version_digest = hashlib.sha256(
+                    "|".join(
+                        str(fetched_provenance[key].get("sha256", ""))
+                        for key in sorted(fetched_provenance)
+                    ).encode("utf-8")
+                ).hexdigest()[:12]
+                snapshot_dir = cache_path.parent / "snapshots"
+                snapshot_dir.mkdir(parents=True, exist_ok=True)
+                version_path = snapshot_dir / f"treasury_spreads_{version_digest}.csv"
+                if not version_path.exists():
+                    combined.rename_axis("Date").reset_index().to_csv(
+                        version_path, index=False, date_format="%Y-%m-%d",
+                    )
         except OSError:
             pass
 
@@ -273,9 +376,20 @@ def load_treasury_spreads(
         suffix = f" 자동 업데이트 실패: {update_detail}" if update_detail else ""
         raise ValueError(f"금리 CSV에서 필요한 월을 확보하지 못했습니다 ({detail}).{suffix}")
 
-    return {
-        series_id: combined.loc[start:end, series_id].dropna().rename(series_id)
-        for series_id in requested
-    }
+    result = {}
+    for series_id in requested:
+        series = combined.loc[start:end, series_id].dropna().rename(series_id)
+        series.attrs.update({
+            "source": "FRED",
+            "snapshot_id": (
+                f"fred-{series_id}-{str(fetched_provenance[series_id].get('sha256'))[:12]}"
+                if series_id in fetched_provenance
+                else _file_snapshot_id(packaged_path, "bundled-treasury")
+            ),
+            "snapshot_mode": mode,
+            "data_policy": "bundled_snapshot_only" if mode == "fixed" else "bundled_snapshot_then_missing_month_refresh",
+        })
+        result[series_id] = series
+    return result
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import secrets
 import time
 from dataclasses import replace
@@ -14,7 +15,12 @@ import streamlit as st
 from snowball.core.catalog import US_ETFS, display_name
 from snowball.core.engine import resolve_recent_period
 from snowball.app_state import SavedRun
-from snowball.data.market_data import load_sp500_dividend_yield, load_treasury_spreads
+from snowball.data.market_data import (
+    compare_dividend_snapshots,
+    download_latest_sp500_dividend_snapshot,
+    load_sp500_dividend_yield,
+    load_treasury_spreads,
+)
 from snowball.data.prices import PriceBundle, download_yahoo_prices
 from snowball.presets import MomentumSpec, PRESETS, PortfolioPreset, SpreadRule
 from snowball.service import run_preset
@@ -41,6 +47,10 @@ TESTED_MARKET_SIGNALS = (
     "장단기 금리차 역전 (10년-3개월)",
     "S&P500 배당수익률",
 )
+MARKET_DATA_MODES = {
+    "고정 스냅샷": "fixed",
+    "최신 데이터": "latest",
+}
 
 
 def _css() -> None:
@@ -251,17 +261,22 @@ def _prices(symbols: tuple[str, ...], start_iso: str, end_iso: str) -> PriceBund
 
 
 @st.cache_data(ttl=24 * 60 * 60, show_spinner=False)
-def _market_data(signals: tuple[str, ...], start_iso: str, end_iso: str) -> dict[str, pd.Series]:
+def _market_data(signals: tuple[str, ...], start_iso: str, end_iso: str, mode: str) -> dict[str, pd.Series]:
     result: dict[str, pd.Series] = {}
     spread_ids = set()
     if "장단기 금리차 역전 (10년-2년)" in signals:
         spread_ids.add("T10Y2Y")
     if "장단기 금리차 역전 (10년-3개월)" in signals:
         spread_ids.add("T10Y3M")
-    result.update(load_treasury_spreads(spread_ids, start_iso, end_iso))
+    result.update(load_treasury_spreads(spread_ids, start_iso, end_iso, mode=mode))
     if "S&P500 배당수익률" in signals:
-        result["SP500_DIV_YIELD"] = load_sp500_dividend_yield(start_iso, end_iso)
+        result["SP500_DIV_YIELD"] = load_sp500_dividend_yield(start_iso, end_iso, mode=mode)
     return result
+
+
+@st.cache_data(ttl=24 * 60 * 60, show_spinner=False)
+def _latest_dividend_snapshot() -> pd.DataFrame:
+    return download_latest_sp500_dividend_snapshot()
 
 
 @st.cache_resource(show_spinner=False)
@@ -328,6 +343,25 @@ def _return_cell_style(value: object) -> str:
     return "background-color: #f4f5f8; color: #4d5565"
 
 
+def _market_snapshot_table(result: dict) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    market = result.get("engine_config", {}).get("_market_data", {})
+    for indicator, series in market.items():
+        observations = series.attrs.get("observation_dates", {})
+        for date, value in series.items():
+            month = str(pd.Timestamp(date).to_period("M"))
+            rows.append({
+                "관측 월": month,
+                "지표": indicator,
+                "원시값": float(value),
+                "실제 관측일": observations.get(month),
+                "출처": series.attrs.get("source", "-"),
+                "스냅샷 ID": series.attrs.get("snapshot_id", "-"),
+                "모드": series.attrs.get("snapshot_mode", "-"),
+            })
+    return pd.DataFrame(rows)
+
+
 def _show_results(result: dict, bundle: PriceBundle) -> None:
     metrics = result["metrics"]
     st.header("백테스트 결과")
@@ -344,7 +378,7 @@ def _show_results(result: dict, bundle: PriceBundle) -> None:
     st.markdown(f'<div class="metric-grid">{cards}</div>', unsafe_allow_html=True)
     st.caption(f"실제 공통 평가기간: {result['common_start'].date()} ~ {result['common_end'].date()} · 연간 턴오버 {result['annual_turnover']:.2%}")
 
-    tabs = st.tabs(("수익률 차트", "손실폭", "월별 수익률", "리밸런싱", "판단 원시값", "적용 설정"))
+    tabs = st.tabs(("수익률 차트", "손실폭", "월별 수익률", "리밸런싱", "판단 원시값", "데이터 스냅샷", "적용 설정"))
     with tabs[0]:
         nav = result["nav"]
         chart = ((nav / nav.iloc[0]) - 1.0).rename("포트폴리오").to_frame()
@@ -378,6 +412,59 @@ def _show_results(result: dict, bundle: PriceBundle) -> None:
                 st.dataframe(result["market_audits"][selected], use_container_width=True, hide_index=True)
             st.caption("판단은 반올림하지 않은 원시값으로 수행합니다. 화면 표시는 가독성을 위해 단순화될 수 있습니다.")
     with tabs[5]:
+        metadata = result.get("data_snapshot", {})
+        st.markdown("**이번 실행에 사용된 데이터 버전**")
+        st.json(metadata, expanded=False)
+        snapshot = _market_snapshot_table(result)
+        if snapshot.empty:
+            st.info("선택한 전략에는 별도의 시장 데이터 지표가 없습니다.")
+        else:
+            st.dataframe(snapshot, use_container_width=True, hide_index=True)
+            st.download_button(
+                "시장 데이터 스냅샷 CSV 다운로드",
+                snapshot.to_csv(index=False).encode("utf-8-sig"),
+                file_name="market_data_snapshot.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+        left, right = st.columns(2)
+        left.download_button(
+            "수정종가 CSV 다운로드",
+            bundle.adjusted_close.rename_axis("Date").to_csv().encode("utf-8-sig"),
+            file_name=f"adjusted_close_{metadata.get('price_snapshot_id', 'snapshot')}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+        right.download_button(
+            "수정시가 CSV 다운로드",
+            bundle.adjusted_open.rename_axis("Date").to_csv().encode("utf-8-sig"),
+            file_name=f"adjusted_open_{metadata.get('price_snapshot_id', 'snapshot')}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+        market = result.get("engine_config", {}).get("_market_data", {})
+        if "SP500_DIV_YIELD" in market and st.toggle("최신 Multpl 값과 비교", key="compare_latest_dividend"):
+            try:
+                with st.spinner("최신 배당수익률 자료와 비교하고 있습니다…"):
+                    latest = _latest_dividend_snapshot()
+                comparison = compare_dividend_snapshots(
+                    market["SP500_DIV_YIELD"], latest,
+                    result["common_start"].date().isoformat(), result["common_end"].date().isoformat(),
+                )
+                changed = comparison[comparison["상태"] != "동일"]
+                st.metric("변경·신규 관측치", len(changed))
+                st.dataframe(changed if not changed.empty else comparison.tail(12), use_container_width=True, hide_index=True)
+                st.download_button(
+                    "최신 후보 스냅샷 CSV 다운로드",
+                    latest.rename_axis("Date").reset_index().to_csv(index=False).encode("utf-8-sig"),
+                    file_name=f"sp500_dividend_{str(latest.attrs.get('sha256', 'latest'))[:12]}.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
+                st.caption("고정 스냅샷은 자동으로 덮어쓰지 않습니다. 최신 후보를 검토한 뒤 별도 버전으로 승격합니다.")
+            except Exception as error:
+                st.error(f"최신 스냅샷을 비교하지 못했습니다: {error}")
+    with tabs[6]:
         config = dict(result["engine_config"])
         config.pop("execution_prices", None)
         config.pop("_market_data", None)
@@ -389,12 +476,26 @@ def _execute(saved: SavedRun) -> tuple[dict, PriceBundle]:
     warmup = pd.Timestamp(saved.start_date) - pd.DateOffset(months=18)
     symbols = tuple(dict.fromkeys(saved.preset.symbols + ("QQQ",)))
     bundle = _prices(symbols, warmup.date().isoformat(), saved.end_date.isoformat())
-    market = _market_data(saved.preset.market_signals, warmup.date().isoformat(), saved.end_date.isoformat())
+    market_mode = getattr(saved, "market_data_mode", "fixed")
+    market = _market_data(saved.preset.market_signals, warmup.date().isoformat(), saved.end_date.isoformat(), market_mode)
     result = run_preset(
         saved.preset, bundle, market, saved.start_date, saved.end_date,
         initial_investment=saved.initial_investment,
         transaction_cost_rate=saved.transaction_cost_rate,
     )
+    price_hash = hashlib.sha256(
+        pd.util.hash_pandas_object(bundle.adjusted_close, index=True).values.tobytes()
+        + pd.util.hash_pandas_object(bundle.adjusted_open, index=True).values.tobytes()
+    ).hexdigest()[:12]
+    result["data_snapshot"] = {
+        "price_source": bundle.source,
+        "price_snapshot_id": f"yahoo-{price_hash}",
+        "market_data_mode": market_mode,
+        "market_snapshots": {
+            name: series.attrs.get("snapshot_id", "-") for name, series in market.items()
+        },
+        "created_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+    }
     return result, bundle
 
 
@@ -424,6 +525,12 @@ def main() -> None:
         left, right = st.columns(2)
         initial = float(left.number_input("초기 투자금(USD)", min_value=100.0, value=10_000.0, step=1_000.0))
         cost_bps = float(right.number_input("편도 거래비용(bp)", min_value=0.0, max_value=500.0, value=0.0, step=1.0))
+        mode_label = st.radio(
+            "시장 데이터 버전",
+            tuple(MARKET_DATA_MODES),
+            horizontal=True,
+            help="고정 스냅샷은 같은 과거 결과를 재현하고, 최신 데이터는 새 공급원 값을 별도 버전으로 사용합니다.",
+        )
 
     if st.button("백테스트 실행", type="primary", use_container_width=True):
         if start_date >= end_date:
@@ -440,6 +547,7 @@ def main() -> None:
             end_date=end_date,
             initial_investment=initial,
             transaction_cost_rate=cost_bps / 10_000.0,
+            market_data_mode=MARKET_DATA_MODES[mode_label],
         )
         try:
             with st.spinner("가격과 시장 데이터를 불러와 계산하고 있습니다…"):

@@ -4,7 +4,11 @@ from pathlib import Path
 
 import pandas as pd
 
-from snowball.data.market_data import load_sp500_dividend_yield, parse_multpl_dividend_yield
+from snowball.data.market_data import (
+    compare_dividend_snapshots,
+    load_sp500_dividend_yield,
+    parse_multpl_dividend_yield,
+)
 
 
 class _Response:
@@ -62,6 +66,56 @@ class DividendYieldTests(unittest.TestCase):
             self.assertEqual(result.attrs["estimate_months"], ["2024-03"])
             self.assertEqual(len(result.attrs["sha256"]), 64)
             self.assertEqual(result.attrs["vintage_mode"], "current_history_not_point_in_time")
+
+    def test_fixed_mode_ignores_changed_runtime_cache(self):
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            packaged = Path(directory) / "packaged.csv"
+            cache = Path(directory) / "cache.csv"
+            pd.DataFrame([
+                {"Date": "2024-02-29", "SP500_DIV_YIELD": 1.41, "Estimate": False},
+            ]).to_csv(packaged, index=False)
+            pd.DataFrame([
+                {"Date": "2024-02-29", "SP500_DIV_YIELD": 9.99, "Estimate": False},
+            ]).to_csv(cache, index=False)
+            result = load_sp500_dividend_yield(
+                "2024-02-01", "2024-02-29", packaged_path=packaged,
+                cache_path=cache, mode="fixed",
+                request_get=lambda *args, **kwargs: self.fail("fixed mode must not call network"),
+            )
+            self.assertEqual(result.tolist(), [1.41])
+            self.assertEqual(result.attrs["snapshot_mode"], "fixed")
+            self.assertTrue(result.attrs["snapshot_id"].startswith("bundled-dividend-"))
+
+    def test_latest_mode_preserves_hashed_candidate_version(self):
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            packaged = Path(directory) / "packaged.csv"
+            cache = Path(directory) / "runtime" / "cache.csv"
+            pd.DataFrame([
+                {"Date": "2024-02-29", "SP500_DIV_YIELD": 1.40, "Estimate": False},
+                {"Date": "2024-03-31", "SP500_DIV_YIELD": 1.38, "Estimate": False},
+            ]).to_csv(packaged, index=False)
+            result = load_sp500_dividend_yield(
+                "2024-02-01", "2024-03-31", packaged_path=packaged,
+                cache_path=cache, mode="latest",
+                request_get=lambda *args, **kwargs: _Response(self.HTML),
+            )
+            self.assertEqual(result.tolist(), [1.41, 1.37])
+            versions = list((cache.parent / "snapshots").glob("sp500_dividend_yield_*.csv"))
+            self.assertEqual(len(versions), 1)
+            self.assertEqual(result.attrs["snapshot_mode"], "latest")
+
+    def test_snapshot_comparison_identifies_changes_and_new_months(self):
+        baseline = pd.Series(
+            [1.41], index=pd.to_datetime(["2024-02-29"]), name="SP500_DIV_YIELD",
+        )
+        candidate = pd.DataFrame(
+            {"SP500_DIV_YIELD": [1.42, 1.37]},
+            index=pd.to_datetime(["2024-02-29", "2024-03-31"]),
+        )
+        compared = compare_dividend_snapshots(
+            baseline, candidate, "2024-02-01", "2024-03-31",
+        )
+        self.assertEqual(compared["상태"].tolist(), ["변경", "신규"])
 
 
 if __name__ == "__main__":

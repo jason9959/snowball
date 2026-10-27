@@ -15,6 +15,7 @@ class SavedRun:
     end_date: dt.date
     initial_investment: float
     transaction_cost_rate: float
+    market_data_mode: str = "fixed"
 
     def validate(self) -> None:
         self.preset.validate()
@@ -24,3 +25,5 @@ class SavedRun:
             raise ValueError("초기 투자금은 0보다 커야 합니다.")
         if not 0 <= self.transaction_cost_rate <= 0.05:
             raise ValueError("거래비용이 올바르지 않습니다.")
+        if self.market_data_mode not in {"fixed", "latest"}:
+            raise ValueError("시장 데이터 모드가 올바르지 않습니다.")
