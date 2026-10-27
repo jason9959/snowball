@@ -22,6 +22,7 @@ from snowball.data.market_data import (
     load_treasury_spreads,
 )
 from snowball.data.prices import PriceBundle, download_yahoo_prices
+from snowball.exports import diagnostic_frames, diagnostic_zip
 from snowball.presets import MomentumSpec, PRESETS, PortfolioPreset, SpreadRule
 from snowball.service import run_preset
 
@@ -377,6 +378,15 @@ def _show_results(result: dict, bundle: PriceBundle) -> None:
     )
     st.markdown(f'<div class="metric-grid">{cards}</div>', unsafe_allow_html=True)
     st.caption(f"실제 공통 평가기간: {result['common_start'].date()} ~ {result['common_end'].date()} · 연간 턴오버 {result['annual_turnover']:.2%}")
+    st.download_button(
+        "비교 진단자료 한 번에 다운로드 (ZIP)",
+        diagnostic_zip(result),
+        file_name=f"snowball_diagnostics_{result['common_start'].date()}_{result['common_end'].date()}.zip",
+        mime="application/zip",
+        use_container_width=True,
+        help="월별 수익률, 리밸런싱, 자산·카나리아·시장 신호, 일별 NAV와 낙폭이 포함됩니다.",
+    )
+    exports = diagnostic_frames(result)
 
     tabs = st.tabs(("수익률 차트", "손실폭", "월별 수익률", "리밸런싱", "판단 원시값", "데이터 스냅샷", "적용 설정"))
     with tabs[0]:
@@ -396,8 +406,22 @@ def _show_results(result: dict, bundle: PriceBundle) -> None:
         else:
             styled = monthly.style.format("{:.2%}").map(_return_cell_style)
             st.dataframe(styled, use_container_width=True)
+            st.download_button(
+                "월별 수익률 CSV 다운로드",
+                exports["01_monthly_returns.csv"].to_csv(index=False).encode("utf-8-sig"),
+                file_name="monthly_returns.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
     with tabs[3]:
         st.dataframe(result["history"], use_container_width=True, hide_index=True)
+        st.download_button(
+            "리밸런싱 내역 CSV 다운로드",
+            exports["02_rebalancing.csv"].to_csv(index=False).encode("utf-8-sig"),
+            file_name="rebalancing.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
     with tabs[4]:
         keys = list(result["candidate_snapshots"])
         if keys:
@@ -411,6 +435,17 @@ def _show_results(result: dict, bundle: PriceBundle) -> None:
                 st.markdown("**시장 데이터 원시 신호**")
                 st.dataframe(result["market_audits"][selected], use_container_width=True, hide_index=True)
             st.caption("판단은 반올림하지 않은 원시값으로 수행합니다. 화면 표시는 가독성을 위해 단순화될 수 있습니다.")
+            st.download_button(
+                "전체 판단 원시값 CSV 다운로드",
+                pd.concat([
+                    exports["03_asset_signals.csv"],
+                    exports["04_canary_signals.csv"],
+                    exports["05_market_signals.csv"],
+                ], ignore_index=True, sort=False).to_csv(index=False).encode("utf-8-sig"),
+                file_name="decision_raw_values.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
     with tabs[5]:
         metadata = result.get("data_snapshot", {})
         st.markdown("**이번 실행에 사용된 데이터 버전**")
