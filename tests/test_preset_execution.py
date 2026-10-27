@@ -55,6 +55,10 @@ class PresetExecutionTests(unittest.TestCase):
         self.assertEqual(blended["preset_name"], "3. 프리셋 결합")
         self.assertAlmostEqual(blended["history"].iloc[0]["프리셋 1 비중"], 0.5)
         self.assertAlmostEqual(blended["history"].iloc[0]["프리셋 2 비중"], 0.5)
+        self.assertNotEqual(
+            blended["history"].iloc[0]["프리셋 1 선택"],
+            blended["history"].iloc[0]["프리셋 2 선택"],
+        )
         selected = blended["history"].iloc[0]["선택된 종목"]
         total = sum(float(item.rsplit(" ", 1)[1].rstrip("%")) for item in selected.split(", "))
         self.assertAlmostEqual(total, 100.0)

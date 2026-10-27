@@ -335,6 +335,24 @@ def _monthly_returns(nav: pd.Series) -> pd.DataFrame:
     return pivot
 
 
+def _selection_table(selection: object, sleeve_weight: float = 1.0) -> pd.DataFrame:
+    rows = []
+    if not isinstance(selection, str):
+        return pd.DataFrame(columns=["종목", "전략 내부 비중", "전체 포트폴리오 비중"])
+    for item in selection.split(", "):
+        try:
+            ticker, percent = item.rsplit(" ", 1)
+            internal = float(percent.rstrip("%")) / 100.0
+        except (ValueError, AttributeError):
+            continue
+        rows.append({
+            "종목": ticker,
+            "전략 내부 비중": f"{internal:.1%}",
+            "전체 포트폴리오 비중": f"{internal * sleeve_weight:.1%}",
+        })
+    return pd.DataFrame(rows)
+
+
 def _return_cell_style(value: object) -> str:
     """Color monthly returns without matplotlib, which is absent on Cloud."""
     if pd.isna(value):
@@ -419,6 +437,36 @@ def _show_results(result: dict, bundle: PriceBundle) -> None:
                 use_container_width=True,
             )
     with tabs[3]:
+        if result.get("preset_name") == COMBINED_PRESET_NAME and not result["history"].empty:
+            history = result["history"]
+            applied_dates = history["적용일"].astype(str).tolist()
+            selected_date = st.selectbox(
+                "확인할 리밸런싱 적용일", applied_dates,
+                index=len(applied_dates) - 1, key="combined_rebalance_date",
+            )
+            row = history.loc[history["적용일"].astype(str) == selected_date].iloc[-1]
+            st.markdown("**최종 결합 종목**")
+            final_table = _selection_table(row["선택된 종목"])
+            if not final_table.empty:
+                st.dataframe(
+                    final_table[["종목", "전략 내부 비중"]].rename(
+                        columns={"전략 내부 비중": "최종 비중"},
+                    ),
+                    use_container_width=True, hide_index=True,
+                )
+            st.markdown(f"**프리셋 1 원본 선택 · 전체의 {float(row['프리셋 1 비중']):.0%} 배정**")
+            st.dataframe(
+                _selection_table(row["프리셋 1 선택"], float(row["프리셋 1 비중"])),
+                use_container_width=True, hide_index=True,
+            )
+            st.markdown(f"**프리셋 2 원본 선택 · 전체의 {float(row['프리셋 2 비중']):.0%} 배정**")
+            st.dataframe(
+                _selection_table(row["프리셋 2 선택"], float(row["프리셋 2 비중"])),
+                use_container_width=True, hide_index=True,
+            )
+            if row["프리셋 1 선택"] == row["프리셋 2 선택"]:
+                st.info("이 달은 두 프리셋이 실제로 같은 종목을 선택했습니다. 각 전략은 독립 계산되며 비중만 합산됩니다.")
+            st.markdown("**전체 리밸런싱 기록**")
         st.dataframe(result["history"], use_container_width=True, hide_index=True)
         st.download_button(
             "리밸런싱 내역 CSV 다운로드",
