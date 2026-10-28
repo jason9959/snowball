@@ -34,6 +34,19 @@ class PresetTests(unittest.TestCase):
         self.assertEqual(preset.spread_10y3m.as_dict(), {"lag": 7, "active": 8, "threshold": -0.5})
         self.assertAlmostEqual(preset.dividend_threshold, 1.6)
 
+    def test_alternative_aggressive_preset_only_changes_attack_score(self):
+        original = get_preset("2. 집중투자 공격형")
+        alternative = get_preset("7. 집중투자 공격형 1-3-6-9-12")
+        self.assertEqual(alternative.attack_tickers, original.attack_tickers)
+        self.assertEqual(alternative.defense_tickers, original.defense_tickers)
+        self.assertEqual(alternative.attack_relative.score_type, "1-3-6-9-12개월 단순")
+        self.assertEqual(alternative.attack_absolute.score_type, "1-3-6-9-12개월 단순")
+        self.assertEqual(alternative.defense_relative, original.defense_relative)
+        self.assertEqual(alternative.canary_tickers, original.canary_tickers)
+        self.assertEqual(alternative.market_signals, original.market_signals)
+        self.assertEqual(alternative.spread_10y3m, original.spread_10y3m)
+        self.assertEqual(alternative.dividend_threshold, original.dividend_threshold)
+
     def test_unknown_preset_is_actionable_value_error(self):
         with self.assertRaisesRegex(ValueError, "알 수 없는 프리셋"):
             get_preset("없는 전략")

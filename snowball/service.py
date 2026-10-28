@@ -164,43 +164,49 @@ def _run_domestic_from_signal_result(
     return result
 
 
-def _blend_history(first: pd.DataFrame, second: pd.DataFrame, first_weight: float) -> pd.DataFrame:
+def _blend_history(
+    first: pd.DataFrame,
+    second: pd.DataFrame,
+    first_weight: float,
+    first_label: str = "프리셋 1",
+    second_label: str = "프리셋 2",
+) -> pd.DataFrame:
     second_weight = 1.0 - first_weight
-    left = first.add_prefix("프리셋 1 · ")
-    right = second.add_prefix("프리셋 2 · ")
+    left = first.add_prefix(f"{first_label} · ")
+    right = second.add_prefix(f"{second_label} · ")
     left["적용일"] = first["적용일"].astype(str).to_numpy()
     right["적용일"] = second["적용일"].astype(str).to_numpy()
     merged = left.merge(right, on="적용일", how="outer", sort=True)
     rows: list[dict[str, object]] = []
     for _, source in merged.iterrows():
         combined: dict[str, float] = {}
-        for ticker, weight in _scaled_selection(source.get("프리셋 1 · 선택된 종목"), first_weight).items():
+        for ticker, weight in _scaled_selection(source.get(f"{first_label} · 선택된 종목"), first_weight).items():
             combined[ticker] = combined.get(ticker, 0.0) + weight
-        for ticker, weight in _scaled_selection(source.get("프리셋 2 · 선택된 종목"), second_weight).items():
+        for ticker, weight in _scaled_selection(source.get(f"{second_label} · 선택된 종목"), second_weight).items():
             combined[ticker] = combined.get(ticker, 0.0) + weight
         selected = ", ".join(
             f"{ticker} {weight:.1%}" for ticker, weight in combined.items() if weight > 1e-12
         )
         rows.append({
-            "예정일": source.get("프리셋 1 · 예정일", source.get("프리셋 2 · 예정일")),
+            "예정일": source.get(f"{first_label} · 예정일", source.get(f"{second_label} · 예정일")),
             "적용일": source["적용일"],
-            "판단 기준일": source.get("프리셋 1 · 판단 기준일", source.get("프리셋 2 · 판단 기준일")),
+            "판단 기준일": source.get(f"{first_label} · 판단 기준일", source.get(f"{second_label} · 판단 기준일")),
             "선택된 종목": selected,
-            "프리셋 1 비중": first_weight,
-            "프리셋 1 선택": source.get("프리셋 1 · 선택된 종목", "-"),
-            "프리셋 2 비중": second_weight,
-            "프리셋 2 선택": source.get("프리셋 2 · 선택된 종목", "-"),
+            f"{first_label} 비중": first_weight,
+            f"{first_label} 선택": source.get(f"{first_label} · 선택된 종목", "-"),
+            f"{second_label} 비중": second_weight,
+            f"{second_label} 선택": source.get(f"{second_label} · 선택된 종목", "-"),
             "턴오버": (
-                first_weight * float(source.get("프리셋 1 · 턴오버", 0.0) or 0.0)
-                + second_weight * float(source.get("프리셋 2 · 턴오버", 0.0) or 0.0)
+                first_weight * float(source.get(f"{first_label} · 턴오버", 0.0) or 0.0)
+                + second_weight * float(source.get(f"{second_label} · 턴오버", 0.0) or 0.0)
             ),
             "거래비용": (
-                first_weight * float(source.get("프리셋 1 · 거래비용", 0.0) or 0.0)
-                + second_weight * float(source.get("프리셋 2 · 거래비용", 0.0) or 0.0)
+                first_weight * float(source.get(f"{first_label} · 거래비용", 0.0) or 0.0)
+                + second_weight * float(source.get(f"{second_label} · 거래비용", 0.0) or 0.0)
             ),
             "평가금액": (
-                first_weight * float(source.get("프리셋 1 · 평가금액", 0.0) or 0.0)
-                + second_weight * float(source.get("프리셋 2 · 평가금액", 0.0) or 0.0)
+                first_weight * float(source.get(f"{first_label} · 평가금액", 0.0) or 0.0)
+                + second_weight * float(source.get(f"{second_label} · 평가금액", 0.0) or 0.0)
             ),
         })
     return pd.DataFrame(rows)
@@ -208,11 +214,12 @@ def _blend_history(first: pd.DataFrame, second: pd.DataFrame, first_weight: floa
 
 def _blend_snapshots(
     first: dict[str, pd.DataFrame], second: dict[str, pd.DataFrame],
+    first_label: str = "프리셋 1", second_label: str = "프리셋 2",
 ) -> dict[str, pd.DataFrame]:
     combined: dict[str, pd.DataFrame] = {}
     for date in sorted(set(first) | set(second)):
         frames = []
-        for label, source in (("프리셋 1", first), ("프리셋 2", second)):
+        for label, source in ((first_label, first), (second_label, second)):
             frame = source.get(date)
             if frame is None or frame.empty:
                 continue
@@ -311,6 +318,9 @@ def run_blended_presets(
     *,
     initial_investment: float = 10_000.0,
     transaction_cost_rate: float = 0.0,
+    preset_name: str = "3. 프리셋 결합",
+    first_label: str = "프리셋 1",
+    second_label: str = "프리셋 2",
 ) -> dict:
     """Run two independent sleeves and combine their daily values and holdings."""
     if not 0 <= first_weight <= 1:
@@ -330,7 +340,10 @@ def run_blended_presets(
         [first_result["nav"].rename("first"), second_result["nav"].rename("second")],
         axis=1, join="inner",
     ).dropna()
-    history = _blend_history(first_result["history"], second_result["history"], first_weight)
+    history = _blend_history(
+        first_result["history"], second_result["history"], first_weight,
+        first_label, second_label,
+    )
     nav, blended_values, history, annual_turnover = _simulate_blended_portfolio(
         history, prices, navs.index, initial_investment, transaction_cost_rate,
     )
@@ -349,28 +362,32 @@ def run_blended_presets(
         "history": history,
         "candidate_snapshots": _blend_snapshots(
             first_result["candidate_snapshots"], second_result["candidate_snapshots"],
+            first_label, second_label,
         ),
         "canary_audits": _blend_snapshots(
             first_result["canary_audits"], second_result["canary_audits"],
+            first_label, second_label,
         ),
         "market_audits": _blend_snapshots(
             first_result["market_audits"], second_result["market_audits"],
+            first_label, second_label,
         ),
         "final_weights": final_weights,
         "annual_turnover": annual_turnover,
         "common_start": nav.index[0],
         "common_end": nav.index[-1],
-        "preset_name": "3. 프리셋 결합",
+        "preset_name": preset_name,
+        "sleeve_labels": (first_label, second_label),
         "metrics": summarize_nav(nav),
         "engine_config": {
-            "전략": "프리셋 1 + 프리셋 2 혼합",
-            "프리셋 1 비중": first_weight,
-            "프리셋 2 비중": second_weight,
-            "프리셋 1": _display_config(first_result["engine_config"]),
-            "프리셋 2": _display_config(second_result["engine_config"]),
+            "전략": f"{first_label} + {second_label} 혼합",
+            f"{first_label} 비중": first_weight,
+            f"{second_label} 비중": second_weight,
+            first_label: _display_config(first_result["engine_config"]),
+            second_label: _display_config(second_result["engine_config"]),
             "_market_data": dict(market_data),
         },
-        "component_results": {"프리셋 1": first_result, "프리셋 2": second_result},
+        "component_results": {first_label: first_result, second_label: second_result},
     }
     return result
 

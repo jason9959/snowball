@@ -125,6 +125,20 @@ class PresetExecutionTests(unittest.TestCase):
         self.assertEqual(DOMESTIC_EXECUTION_MAP["DBC"], "130680.KS")
         self.assertEqual(DOMESTIC_EXECUTION_MAP["PDBC"], "130680.KS")
 
+    def test_preset_eight_combines_one_and_seven(self):
+        result = run_blended_presets(
+            PRESETS["1. 분산투자 방어형"],
+            PRESETS["7. 집중투자 공격형 1-3-6-9-12"],
+            0.5, self.bundle, self.market_data,
+            dt.date(2010, 1, 1), dt.date(2012, 12, 31),
+            preset_name="8. 프리셋 1 + 7 결합",
+            second_label="프리셋 7",
+        )
+        self.assertEqual(result["preset_name"], "8. 프리셋 1 + 7 결합")
+        self.assertEqual(result["sleeve_labels"], ("프리셋 1", "프리셋 7"))
+        self.assertIn("프리셋 7 선택", result["history"].columns)
+        self.assertAlmostEqual(result["history"].iloc[0]["프리셋 7 비중"], 0.5)
+
 
 if __name__ == "__main__":
     unittest.main()
