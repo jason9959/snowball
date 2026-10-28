@@ -22,7 +22,7 @@ from snowball.data.market_data import (
     load_treasury_spreads,
 )
 from snowball.data.prices import PriceBundle, download_yahoo_prices
-from snowball.domestic import domestic_label, domestic_symbols
+from snowball.domestic import DOMESTIC_EXECUTION_MAP, domestic_label, domestic_symbols
 from snowball.exports import diagnostic_frames, diagnostic_zip
 from snowball.presets import MomentumSpec, PRESETS, PortfolioPreset, SpreadRule
 from snowball.service import (
@@ -123,6 +123,24 @@ def _asset_options(extra: tuple[str, ...] = ()) -> list[str]:
     return sorted(set(US_ETFS) | set(extra))
 
 
+def _domestic_mapping_table(*presets: PortfolioPreset) -> pd.DataFrame:
+    roles: dict[str, set[str]] = {}
+    for position, preset in enumerate(presets, start=1):
+        for ticker in preset.attack_tickers:
+            roles.setdefault(ticker, set()).add(f"프리셋 {position} 투자")
+        for ticker in preset.defense_tickers:
+            roles.setdefault(ticker, set()).add(f"프리셋 {position} 방어")
+    rows = []
+    for ticker, role in roles.items():
+        domestic = DOMESTIC_EXECUTION_MAP[ticker]
+        rows.append({
+            "구분": " · ".join(sorted(role)),
+            "미국 신호": ticker,
+            "국내 실행 ETF": domestic_label(domestic),
+        })
+    return pd.DataFrame(rows)
+
+
 def _preset_buttons() -> str:
     st.subheader("연구 포트폴리오 불러오기")
     left, center, right = st.columns(3)
@@ -177,17 +195,27 @@ def _period_controls() -> tuple[dt.date, dt.date]:
     return start, end
 
 
-def _strategy_controls(base: PortfolioPreset) -> PortfolioPreset:
+def _strategy_controls(base: PortfolioPreset, *, domestic_execution: bool = False) -> PortfolioPreset:
     version = st.session_state.get("form_version", 0)
     prefix = f"strategy_{base.name}_{version}"
-    options = _asset_options(base.symbols)
+    signal_options = _asset_options(base.symbols)
+    asset_options = sorted(DOMESTIC_EXECUTION_MAP) if domestic_execution else signal_options
+
+    def asset_label(ticker: str) -> str:
+        if domestic_execution:
+            mapped = DOMESTIC_EXECUTION_MAP[ticker]
+            return f"{domestic_label(mapped)} · 신호 {ticker}"
+        return display_name(ticker, "미국 ETF")
 
     with st.container(border=True):
         st.subheader("🎯 투자자산 선택")
         attack_tickers = tuple(st.multiselect(
-            "투자자산 후보군", options, default=list(base.attack_tickers),
-            format_func=lambda x: display_name(x, "미국 ETF"), key=f"{prefix}_attack_assets",
+            "투자자산 후보군" + (" · 국내 실행 ETF" if domestic_execution else ""),
+            asset_options, default=list(base.attack_tickers),
+            format_func=asset_label, key=f"{prefix}_attack_assets",
         ))
+        if domestic_execution:
+            st.caption("화면에는 실제 매수할 국내 ETF를 표시하고, 모멘텀 판단은 오른쪽의 대응 미국 ETF로 계산합니다.")
         attack_mode = st.radio("모멘텀 방식", ATTACK_MODES, index=ATTACK_MODES.index(base.attack_mode), key=f"{prefix}_attack_mode")
         attack_count = int(st.number_input(
             "선택자산 수", 1, max(1, len(attack_tickers)), min(base.attack_select_count, max(1, len(attack_tickers))),
@@ -217,7 +245,7 @@ def _strategy_controls(base: PortfolioPreset) -> PortfolioPreset:
         canary_momentum = base.canary_momentum
         if canary_enabled:
             canary_tickers = tuple(st.multiselect(
-                "카나리아 유니버스", options, default=list(base.canary_tickers),
+                "카나리아 유니버스", signal_options, default=list(base.canary_tickers),
                 format_func=lambda x: display_name(x, "미국 ETF"), key=f"{prefix}_canary_assets",
             ))
             canary_momentum = _momentum_editor("카나리아 모멘텀", base.canary_momentum, f"{prefix}_canary_momentum")
@@ -259,8 +287,9 @@ def _strategy_controls(base: PortfolioPreset) -> PortfolioPreset:
     with st.container(border=True):
         st.subheader("🛡️ 방어자산 선택기준")
         defense_tickers = tuple(st.multiselect(
-            "방어자산 후보군", options, default=list(base.defense_tickers),
-            format_func=lambda x: display_name(x, "미국 ETF"), key=f"{prefix}_defense_assets",
+            "방어자산 후보군" + (" · 국내 실행 ETF" if domestic_execution else ""),
+            asset_options, default=list(base.defense_tickers),
+            format_func=asset_label, key=f"{prefix}_defense_assets",
         ))
         defense_mode = st.radio("선택 기준", DEFENSE_MODES, index=DEFENSE_MODES.index(base.defense_mode), key=f"{prefix}_defense_mode")
         defense_count = int(st.number_input(
@@ -709,6 +738,7 @@ def main() -> None:
 
     preset_name = _preset_buttons()
     start_date, end_date = _period_controls()
+    domestic_execution = preset_name in DOMESTIC_PRESET_NAMES
     combined_weight = 50
     if preset_name in COMBINED_PRESET_NAMES:
         with st.container(border=True):
@@ -723,6 +753,15 @@ def main() -> None:
                 f"프리셋 1 {combined_weight}% + 프리셋 {second_number} {100 - combined_weight}%로 "
                 "각 전략의 리밸런싱 종목과 일별 성과를 결합합니다."
             )
+            if domestic_execution:
+                st.markdown("**프리셋 6 국내 실행 종목**")
+                st.dataframe(
+                    _domestic_mapping_table(
+                        PRESETS[PRESET_NAMES[0]], PRESETS[PRESET_NAMES[1]],
+                    ),
+                    use_container_width=True, hide_index=True,
+                )
+                st.caption("신호는 프리셋 1·2의 미국 ETF로 각각 계산하고, 표의 국내 ETF를 다음 한국 거래일에 매수합니다.")
         edited = PRESETS[PRESET_NAMES[0]]
     else:
         if preset_name == DOMESTIC_PRESET_1:
@@ -732,12 +771,11 @@ def main() -> None:
         else:
             base = PRESETS[preset_name]
         with st.expander("전략 조건 편집", expanded=True):
-            edited = _strategy_controls(base)
+            edited = _strategy_controls(base, domestic_execution=domestic_execution)
 
     with st.container(border=True):
         st.subheader("⚙️ 기본 설정")
         left, right = st.columns(2)
-        domestic_execution = preset_name in DOMESTIC_PRESET_NAMES
         if domestic_execution:
             initial = float(left.number_input(
                 "초기 투자금(KRW)", min_value=100_000.0, value=10_000_000.0,

@@ -125,6 +125,14 @@ class PresetExecutionTests(unittest.TestCase):
         self.assertEqual(DOMESTIC_EXECUTION_MAP["DBC"], "130680.KS")
         self.assertEqual(DOMESTIC_EXECUTION_MAP["PDBC"], "130680.KS")
 
+    def test_domestic_presets_have_mappings_for_every_investable_asset(self):
+        for preset_name in ("1. 분산투자 방어형", "2. 집중투자 공격형"):
+            preset = PRESETS[preset_name]
+            for ticker in preset.attack_tickers + preset.defense_tickers:
+                with self.subTest(preset=preset_name, ticker=ticker):
+                    self.assertIn(ticker, DOMESTIC_EXECUTION_MAP)
+                    self.assertTrue(DOMESTIC_EXECUTION_MAP[ticker].endswith(".KS"))
+
     def test_preset_eight_combines_one_and_seven(self):
         result = run_blended_presets(
             PRESETS["1. 분산투자 방어형"],
