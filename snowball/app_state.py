@@ -18,6 +18,7 @@ class SavedRun:
     market_data_mode: str = "fixed"
     secondary_preset: PortfolioPreset | None = None
     preset1_weight: float = 1.0
+    domestic_execution: bool = False
 
     def validate(self) -> None:
         self.preset.validate()

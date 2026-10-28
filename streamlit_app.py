@@ -22,15 +22,28 @@ from snowball.data.market_data import (
     load_treasury_spreads,
 )
 from snowball.data.prices import PriceBundle, download_yahoo_prices
+from snowball.domestic import domestic_label, domestic_symbols
 from snowball.exports import diagnostic_frames, diagnostic_zip
 from snowball.presets import MomentumSpec, PRESETS, PortfolioPreset, SpreadRule
-from snowball.service import run_blended_presets, run_preset
+from snowball.service import (
+    run_blended_presets,
+    run_domestic_blended_presets,
+    run_domestic_preset,
+    run_preset,
+)
 
 
 st.set_page_config(page_title="Snowball Portfolio Lab", page_icon="❄️", layout="wide")
 
 PRESET_NAMES = tuple(PRESETS)
 COMBINED_PRESET_NAME = "3. 프리셋 결합"
+DOMESTIC_PRESET_1 = "4. 국내 분산투자 방어형"
+DOMESTIC_PRESET_2 = "5. 국내 집중투자 공격형"
+DOMESTIC_COMBINED_PRESET_NAME = "6. 국내 프리셋 결합"
+COMBINED_PRESET_NAMES = {COMBINED_PRESET_NAME, DOMESTIC_COMBINED_PRESET_NAME}
+DOMESTIC_PRESET_NAMES = {
+    DOMESTIC_PRESET_1, DOMESTIC_PRESET_2, DOMESTIC_COMBINED_PRESET_NAME,
+}
 MOMENTUM_KINDS = ("수익률", "이동평균", "모멘텀 스코어")
 SCORE_TYPES = (
     "1-3-6개월 단순", "3-6-12개월 단순", "1-3-6-12개월 단순",
@@ -118,6 +131,19 @@ def _preset_buttons() -> str:
         st.rerun()
     if right.button("3. 프리셋 결합", use_container_width=True, type="primary" if st.session_state.get("preset_name", PRESET_NAMES[0]) == COMBINED_PRESET_NAME else "secondary"):
         st.session_state.preset_name = COMBINED_PRESET_NAME
+        st.session_state.form_version = st.session_state.get("form_version", 0) + 1
+        st.rerun()
+    left, center, right = st.columns(3)
+    if left.button(DOMESTIC_PRESET_1, use_container_width=True, type="primary" if st.session_state.get("preset_name", PRESET_NAMES[0]) == DOMESTIC_PRESET_1 else "secondary"):
+        st.session_state.preset_name = DOMESTIC_PRESET_1
+        st.session_state.form_version = st.session_state.get("form_version", 0) + 1
+        st.rerun()
+    if center.button(DOMESTIC_PRESET_2, use_container_width=True, type="primary" if st.session_state.get("preset_name", PRESET_NAMES[0]) == DOMESTIC_PRESET_2 else "secondary"):
+        st.session_state.preset_name = DOMESTIC_PRESET_2
+        st.session_state.form_version = st.session_state.get("form_version", 0) + 1
+        st.rerun()
+    if right.button(DOMESTIC_COMBINED_PRESET_NAME, use_container_width=True, type="primary" if st.session_state.get("preset_name", PRESET_NAMES[0]) == DOMESTIC_COMBINED_PRESET_NAME else "secondary"):
+        st.session_state.preset_name = DOMESTIC_COMBINED_PRESET_NAME
         st.session_state.form_version = st.session_state.get("form_version", 0) + 1
         st.rerun()
     selected = st.session_state.get("preset_name", PRESET_NAMES[0])
@@ -346,7 +372,7 @@ def _selection_table(selection: object, sleeve_weight: float = 1.0) -> pd.DataFr
         except (ValueError, AttributeError):
             continue
         rows.append({
-            "종목": ticker,
+            "종목": domestic_label(ticker) if ticker.endswith(".KS") else ticker,
             "전략 내부 비중": f"{internal:.1%}",
             "전체 포트폴리오 비중": f"{internal * sleeve_weight:.1%}",
         })
@@ -415,10 +441,12 @@ def _show_results(result: dict, bundle: PriceBundle) -> None:
     with tabs[0]:
         nav = result["nav"]
         chart = ((nav / nav.iloc[0]) - 1.0).rename("포트폴리오").to_frame()
-        if "QQQ" in bundle.adjusted_close:
-            qqq = bundle.adjusted_close["QQQ"].reindex(nav.index).ffill().dropna()
+        benchmark = result.get("benchmark_ticker", "QQQ")
+        if benchmark in bundle.adjusted_close:
+            qqq = bundle.adjusted_close[benchmark].reindex(nav.index).ffill().dropna()
             if not qqq.empty:
-                chart.loc[qqq.index, "QQQ"] = qqq / qqq.iloc[0] - 1.0
+                label = "국내 나스닥100" if benchmark.endswith(".KS") else "QQQ"
+                chart.loc[qqq.index, label] = qqq / qqq.iloc[0] - 1.0
         st.line_chart(chart, y_label="누적 수익률")
     with tabs[1]:
         st.line_chart(result["drawdown"].to_frame(), y_label="낙폭")
@@ -437,7 +465,7 @@ def _show_results(result: dict, bundle: PriceBundle) -> None:
                 use_container_width=True,
             )
     with tabs[3]:
-        if result.get("preset_name") == COMBINED_PRESET_NAME and not result["history"].empty:
+        if result.get("preset_name") in COMBINED_PRESET_NAMES and not result["history"].empty:
             history = result["history"]
             applied_dates = history["적용일"].astype(str).tolist()
             selected_date = st.selectbox(
@@ -561,21 +589,57 @@ def _show_results(result: dict, bundle: PriceBundle) -> None:
 
 def _execute(saved: SavedRun) -> tuple[dict, PriceBundle]:
     saved.validate()
+    is_domestic = getattr(saved, "domestic_execution", False)
     warmup = pd.Timestamp(saved.start_date) - pd.DateOffset(months=18)
     secondary_symbols = saved.secondary_preset.symbols if saved.secondary_preset is not None else ()
     symbols = tuple(dict.fromkeys(saved.preset.symbols + secondary_symbols + ("QQQ",)))
-    bundle = _prices(symbols, warmup.date().isoformat(), saved.end_date.isoformat())
+    signal_bundle = _prices(symbols, warmup.date().isoformat(), saved.end_date.isoformat())
     market_mode = getattr(saved, "market_data_mode", "fixed")
     secondary_signals = saved.secondary_preset.market_signals if saved.secondary_preset is not None else ()
     signals = tuple(dict.fromkeys(saved.preset.market_signals + secondary_signals))
     market = _market_data(signals, warmup.date().isoformat(), saved.end_date.isoformat(), market_mode)
-    if saved.secondary_preset is None:
+    if is_domestic:
+        execution_us_symbols = tuple(dict.fromkeys(
+            saved.preset.attack_tickers + saved.preset.defense_tickers
+            + (() if saved.secondary_preset is None else (
+                saved.secondary_preset.attack_tickers + saved.secondary_preset.defense_tickers
+            ))
+            + ("QQQ",)
+        ))
+        execution_bundle = _prices(
+            domestic_symbols(execution_us_symbols),
+            warmup.date().isoformat(), saved.end_date.isoformat(),
+        )
+        if saved.secondary_preset is None:
+            domestic_name = (
+                DOMESTIC_PRESET_1 if saved.preset.name == PRESET_NAMES[0]
+                else DOMESTIC_PRESET_2
+            )
+            result = run_domestic_preset(
+                saved.preset, signal_bundle, execution_bundle, market,
+                saved.start_date, saved.end_date,
+                initial_investment=saved.initial_investment,
+                transaction_cost_rate=saved.transaction_cost_rate,
+                preset_name=domestic_name,
+            )
+        else:
+            result = run_domestic_blended_presets(
+                saved.preset, saved.secondary_preset, saved.preset1_weight,
+                signal_bundle, execution_bundle, market,
+                saved.start_date, saved.end_date,
+                initial_investment=saved.initial_investment,
+                transaction_cost_rate=saved.transaction_cost_rate,
+            )
+        bundle = execution_bundle
+    elif saved.secondary_preset is None:
+        bundle = signal_bundle
         result = run_preset(
             saved.preset, bundle, market, saved.start_date, saved.end_date,
             initial_investment=saved.initial_investment,
             transaction_cost_rate=saved.transaction_cost_rate,
         )
     else:
+        bundle = signal_bundle
         result = run_blended_presets(
             saved.preset, saved.secondary_preset, saved.preset1_weight,
             bundle, market, saved.start_date, saved.end_date,
@@ -610,15 +674,23 @@ def main() -> None:
         st.session_state.last_bundle = bundle
         st.session_state.last_saved_run = saved
         if saved.secondary_preset is not None:
-            st.session_state.preset_name = COMBINED_PRESET_NAME
+            st.session_state.preset_name = (
+                DOMESTIC_COMBINED_PRESET_NAME if getattr(saved, "domestic_execution", False)
+                else COMBINED_PRESET_NAME
+            )
             st.session_state.combined_preset1_weight = int(round(saved.preset1_weight * 100))
+        elif getattr(saved, "domestic_execution", False):
+            st.session_state.preset_name = (
+                DOMESTIC_PRESET_1 if saved.preset.name == PRESET_NAMES[0]
+                else DOMESTIC_PRESET_2
+            )
         elif saved.preset.name in PRESETS:
             st.session_state.preset_name = saved.preset.name
 
     preset_name = _preset_buttons()
     start_date, end_date = _period_controls()
     combined_weight = 50
-    if preset_name == COMBINED_PRESET_NAME:
+    if preset_name in COMBINED_PRESET_NAMES:
         with st.container(border=True):
             st.subheader("⚖️ 결합 비율")
             combined_weight = int(st.number_input(
@@ -632,14 +704,29 @@ def main() -> None:
             )
         edited = PRESETS[PRESET_NAMES[0]]
     else:
-        base = PRESETS[preset_name]
+        if preset_name == DOMESTIC_PRESET_1:
+            base = PRESETS[PRESET_NAMES[0]]
+        elif preset_name == DOMESTIC_PRESET_2:
+            base = PRESETS[PRESET_NAMES[1]]
+        else:
+            base = PRESETS[preset_name]
         with st.expander("전략 조건 편집", expanded=True):
             edited = _strategy_controls(base)
 
     with st.container(border=True):
         st.subheader("⚙️ 기본 설정")
         left, right = st.columns(2)
-        initial = float(left.number_input("초기 투자금(USD)", min_value=100.0, value=10_000.0, step=1_000.0))
+        domestic_execution = preset_name in DOMESTIC_PRESET_NAMES
+        if domestic_execution:
+            initial = float(left.number_input(
+                "초기 투자금(KRW)", min_value=100_000.0, value=10_000_000.0,
+                step=1_000_000.0, key="domestic_initial",
+            ))
+        else:
+            initial = float(left.number_input(
+                "초기 투자금(USD)", min_value=100.0, value=10_000.0,
+                step=1_000.0, key="us_initial",
+            ))
         cost_bps = float(right.number_input("편도 거래비용(bp)", min_value=0.0, max_value=500.0, value=0.0, step=1.0))
         mode_label = st.radio(
             "시장 데이터 버전",
@@ -664,8 +751,9 @@ def main() -> None:
             initial_investment=initial,
             transaction_cost_rate=cost_bps / 10_000.0,
             market_data_mode=MARKET_DATA_MODES[mode_label],
-            secondary_preset=PRESETS[PRESET_NAMES[1]] if preset_name == COMBINED_PRESET_NAME else None,
-            preset1_weight=combined_weight / 100.0 if preset_name == COMBINED_PRESET_NAME else 1.0,
+            secondary_preset=PRESETS[PRESET_NAMES[1]] if preset_name in COMBINED_PRESET_NAMES else None,
+            preset1_weight=combined_weight / 100.0 if preset_name in COMBINED_PRESET_NAMES else 1.0,
+            domestic_execution=domestic_execution,
         )
         try:
             with st.spinner("가격과 시장 데이터를 불러와 계산하고 있습니다…"):

@@ -9,6 +9,7 @@ import pandas as pd
 
 from .core.engine import run_backtest
 from .data.prices import PriceBundle
+from .domestic import DOMESTIC_EXECUTION_MAP, domestic_symbols
 from .metrics import summarize_nav
 from .presets import PortfolioPreset
 
@@ -53,6 +54,114 @@ def _scaled_selection(selection: object, scale: float) -> dict[str, float]:
             continue
         weights[ticker] = weights.get(ticker, 0.0) + weight
     return weights
+
+
+def _format_selection(weights: Mapping[str, float]) -> str:
+    return ", ".join(
+        f"{ticker} {weight:.1%}" for ticker, weight in weights.items() if weight > 1e-12
+    )
+
+
+def _map_domestic_history(history: pd.DataFrame, execution_index: pd.DatetimeIndex) -> pd.DataFrame:
+    """Map US decisions to domestic instruments and the next KRX session."""
+    rows: list[dict[str, object]] = []
+    for _, source in history.iterrows():
+        us_weights = _scaled_selection(source.get("선택된 종목"), 1.0)
+        domestic: dict[str, float] = {}
+        for ticker, weight in us_weights.items():
+            mapped = ticker if ticker == "현금" else DOMESTIC_EXECUTION_MAP.get(ticker)
+            if mapped is None:
+                raise ValueError(f"{ticker}의 국내 실행 ETF가 정해지지 않았습니다.")
+            domestic[mapped] = domestic.get(mapped, 0.0) + weight
+        signal_date = pd.Timestamp(source["적용일"])
+        position = execution_index.searchsorted(signal_date, side="right")
+        if position >= len(execution_index):
+            continue
+        row = source.to_dict()
+        row["미국 신호 종목"] = source.get("선택된 종목", "-")
+        row["선택된 종목"] = _format_selection(domestic)
+        row["미국 적용일"] = str(signal_date.date())
+        row["적용일"] = str(execution_index[position].date())
+        rows.append(row)
+    mapped = pd.DataFrame(rows)
+    if mapped.empty:
+        raise ValueError("입력 기간에 국내 ETF로 실행할 리밸런싱 신호가 없습니다.")
+    return mapped.drop_duplicates(subset=["적용일"], keep="last").reset_index(drop=True)
+
+
+def _domestic_common_start(
+    history: pd.DataFrame, prices: PriceBundle, requested_start: dt.date,
+) -> pd.Timestamp:
+    used = sorted({
+        ticker for selection in history["선택된 종목"]
+        for ticker in _scaled_selection(selection, 1.0) if ticker != "현금"
+    })
+    if not used:
+        return pd.Timestamp(requested_start)
+    first_dates = []
+    for ticker in used:
+        first = prices.adjusted_close[ticker].first_valid_index()
+        if first is None:
+            raise ValueError(f"{ticker}의 국내 가격 데이터가 없습니다.")
+        first_dates.append(pd.Timestamp(first))
+    return max(pd.Timestamp(requested_start), max(first_dates))
+
+
+def _run_domestic_from_signal_result(
+    signal_result: dict,
+    execution_prices: PriceBundle,
+    start_date: dt.date,
+    end_date: dt.date,
+    initial_investment: float,
+    transaction_cost_rate: float,
+    preset_name: str,
+) -> dict:
+    history = _map_domestic_history(signal_result["history"], execution_prices.adjusted_close.index)
+    common_start = max(
+        _domestic_common_start(history, execution_prices, start_date),
+        pd.to_datetime(history["적용일"]).min(),
+    )
+    evaluation_index = execution_prices.adjusted_close.index[
+        (execution_prices.adjusted_close.index >= common_start)
+        & (execution_prices.adjusted_close.index <= pd.Timestamp(end_date))
+    ]
+    if evaluation_index.empty:
+        raise ValueError("국내 ETF의 공통 거래 가능 기간이 선택한 종료일 이후입니다.")
+    prior = history[pd.to_datetime(history["적용일"]) <= evaluation_index[0]]
+    future = history[pd.to_datetime(history["적용일"]) > evaluation_index[0]]
+    if prior.empty:
+        first = history.iloc[0].copy()
+    else:
+        first = prior.iloc[-1].copy()
+    first["적용일"] = str(evaluation_index[0].date())
+    history = pd.concat([pd.DataFrame([first]), future], ignore_index=True)
+    nav, values, history, turnover = _simulate_blended_portfolio(
+        history, execution_prices, evaluation_index, initial_investment, transaction_cost_rate,
+    )
+    drawdown = (nav / nav.cummax() - 1.0).rename("포트폴리오")
+    final_weights = _scaled_selection(history.iloc[-1]["선택된 종목"], 1.0)
+    result = dict(signal_result)
+    result.update({
+        "values": values,
+        "invested": pd.Series(initial_investment, index=nav.index, name="누적 투입금"),
+        "flows": pd.Series(0.0, index=nav.index, name="외부 현금흐름"),
+        "nav": nav,
+        "drawdown": drawdown,
+        "history": history,
+        "final_weights": final_weights,
+        "annual_turnover": turnover,
+        "common_start": nav.index[0],
+        "common_end": nav.index[-1],
+        "preset_name": preset_name,
+        "metrics": summarize_nav(nav),
+        "benchmark_ticker": DOMESTIC_EXECUTION_MAP["QQQ"],
+    })
+    config = dict(signal_result["engine_config"])
+    config["실행 시장"] = "한국거래소 국내 상장 ETF"
+    config["체결 규칙"] = "미국 신호 적용일 다음 국내 거래일 수정시가"
+    config["국내 실행 매핑"] = dict(DOMESTIC_EXECUTION_MAP)
+    result["engine_config"] = config
+    return result
 
 
 def _blend_history(first: pd.DataFrame, second: pd.DataFrame, first_weight: float) -> pd.DataFrame:
@@ -264,3 +373,57 @@ def run_blended_presets(
         "component_results": {"프리셋 1": first_result, "프리셋 2": second_result},
     }
     return result
+
+
+def run_domestic_preset(
+    preset: PortfolioPreset,
+    signal_prices: PriceBundle,
+    execution_prices: PriceBundle,
+    market_data: Mapping[str, pd.Series],
+    start_date: dt.date,
+    end_date: dt.date,
+    *,
+    initial_investment: float = 10_000_000.0,
+    transaction_cost_rate: float = 0.0,
+    preset_name: str = "4. 국내 분산투자 방어형",
+) -> dict:
+    """Calculate signals in USD and execute the selected domestic-listed ETFs."""
+    domestic_symbols(preset.attack_tickers + preset.defense_tickers)
+    signal_result = run_preset(
+        preset, signal_prices, market_data, start_date, end_date,
+        initial_investment=initial_investment,
+        transaction_cost_rate=transaction_cost_rate,
+    )
+    return _run_domestic_from_signal_result(
+        signal_result, execution_prices, start_date, end_date,
+        initial_investment, transaction_cost_rate, preset_name,
+    )
+
+
+def run_domestic_blended_presets(
+    first: PortfolioPreset,
+    second: PortfolioPreset,
+    first_weight: float,
+    signal_prices: PriceBundle,
+    execution_prices: PriceBundle,
+    market_data: Mapping[str, pd.Series],
+    start_date: dt.date,
+    end_date: dt.date,
+    *,
+    initial_investment: float = 10_000_000.0,
+    transaction_cost_rate: float = 0.0,
+) -> dict:
+    """Domestic execution counterpart of preset 3."""
+    domestic_symbols(
+        first.attack_tickers + first.defense_tickers
+        + second.attack_tickers + second.defense_tickers
+    )
+    signal_result = run_blended_presets(
+        first, second, first_weight, signal_prices, market_data, start_date, end_date,
+        initial_investment=initial_investment,
+        transaction_cost_rate=transaction_cost_rate,
+    )
+    return _run_domestic_from_signal_result(
+        signal_result, execution_prices, start_date, end_date,
+        initial_investment, transaction_cost_rate, "6. 국내 프리셋 결합",
+    )
