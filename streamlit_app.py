@@ -31,6 +31,7 @@ from snowball.service import (
     run_domestic_preset,
     run_preset,
 )
+from snowball.user_presets import UserPreset, export_user_presets, import_user_presets
 
 
 st.set_page_config(page_title="Snowball Portfolio Lab", page_icon="❄️", layout="wide")
@@ -49,6 +50,7 @@ COMBINED_PRESET_NAMES = {
 DOMESTIC_PRESET_NAMES = {
     DOMESTIC_PRESET_1, DOMESTIC_PRESET_2, DOMESTIC_COMBINED_PRESET_NAME,
 }
+USER_PRESET_PREFIX = "사용자::"
 MOMENTUM_KINDS = ("수익률", "이동평균", "모멘텀 스코어")
 SCORE_TYPES = (
     "1-3-6개월 단순", "3-6-12개월 단순", "1-3-6-12개월 단순",
@@ -141,6 +143,58 @@ def _domestic_mapping_table(*presets: PortfolioPreset) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _user_presets() -> dict[str, UserPreset]:
+    if "user_presets" not in st.session_state:
+        st.session_state.user_presets = {}
+    return st.session_state.user_presets
+
+
+def _user_preset_key(title: str) -> str:
+    return f"{USER_PRESET_PREFIX}{title}"
+
+
+def _user_preset_manager() -> None:
+    library = _user_presets()
+    with st.expander("내 프리셋 관리", expanded=bool(library)):
+        uploaded = st.file_uploader("프리셋 JSON 불러오기", type=("json",), key="user_preset_upload")
+        if uploaded is not None:
+            digest = hashlib.sha256(uploaded.getvalue()).hexdigest()
+            if digest != st.session_state.get("imported_user_preset_digest"):
+                try:
+                    imported = import_user_presets(uploaded.getvalue())
+                    for record in imported:
+                        library[record.title] = record
+                    st.session_state.imported_user_preset_digest = digest
+                    st.session_state.user_preset_notice = f"내 프리셋 {len(imported)}개를 불러왔습니다."
+                    st.rerun()
+                except ValueError as error:
+                    st.error(str(error))
+        if library:
+            titles = sorted(library)
+            selected = st.selectbox("저장된 프리셋", titles, key="managed_user_preset")
+            left, right = st.columns(2)
+            if left.button("선택 프리셋 불러오기", use_container_width=True):
+                st.session_state.preset_name = _user_preset_key(selected)
+                st.session_state.form_version = st.session_state.get("form_version", 0) + 1
+                st.rerun()
+            if right.button("선택 프리셋 삭제", use_container_width=True):
+                del library[selected]
+                if st.session_state.get("preset_name") == _user_preset_key(selected):
+                    st.session_state.preset_name = PRESET_NAMES[0]
+                st.session_state.user_preset_notice = f"‘{selected}’ 프리셋을 삭제했습니다."
+                st.rerun()
+            st.download_button(
+                "내 프리셋 전체 JSON 다운로드",
+                export_user_presets(library.values()),
+                file_name="snowball_user_presets.json",
+                mime="application/json",
+                use_container_width=True,
+            )
+            st.caption("새로고침·재배포·다른 기기에서 복구하려면 이 JSON을 보관한 뒤 다시 불러오세요.")
+        else:
+            st.caption("아직 저장된 내 프리셋이 없습니다. 아래에서 조건을 만든 뒤 제목과 함께 저장하세요.")
+
+
 def _preset_buttons() -> str:
     st.subheader("연구 포트폴리오 불러오기")
     left, center, right = st.columns(3)
@@ -180,7 +234,39 @@ def _preset_buttons() -> str:
         st.rerun()
     selected = st.session_state.get("preset_name", PRESET_NAMES[0])
     st.caption("버튼을 누르면 아래 모든 전략 조건이 해당 연구 프리셋으로 초기화됩니다. 이후 필요한 항목만 바꿀 수 있습니다.")
+    _user_preset_manager()
+    notice = st.session_state.pop("user_preset_notice", None)
+    if notice:
+        st.success(notice)
     return selected
+
+
+def _save_user_preset_controls(edited: PortfolioPreset, domestic_execution: bool) -> None:
+    with st.container(border=True):
+        st.subheader("💾 내 프리셋 저장")
+        selected = st.session_state.get("preset_name", "")
+        current_title = selected.removeprefix(USER_PRESET_PREFIX) if selected.startswith(USER_PRESET_PREFIX) else ""
+        title = st.text_input(
+            "프리셋 제목", value=current_title,
+            placeholder="예: 장기 투자 방어 전략", key=f"user_preset_title_{selected}",
+        ).strip()
+        st.caption("현재 화면의 모든 전략 조건과 국내 실행 여부를 함께 저장합니다. 같은 제목은 최신 설정으로 덮어씁니다.")
+        if st.button("현재 조건을 프리셋으로 저장", use_container_width=True):
+            if not title:
+                st.error("프리셋 제목을 입력해 주세요.")
+                return
+            try:
+                strategy = replace(edited, name=title)
+                record = UserPreset(title, strategy, domestic_execution)
+                record.validate()
+            except ValueError as error:
+                st.error(str(error))
+                return
+            _user_presets()[title] = record
+            st.session_state.preset_name = _user_preset_key(title)
+            st.session_state.form_version = st.session_state.get("form_version", 0) + 1
+            st.session_state.user_preset_notice = f"‘{title}’을(를) 내 프리셋에 저장했습니다."
+            st.rerun()
 
 
 def _period_controls() -> tuple[dt.date, dt.date]:
@@ -657,7 +743,8 @@ def _execute(saved: SavedRun) -> tuple[dict, PriceBundle]:
         if saved.secondary_preset is None:
             domestic_name = (
                 DOMESTIC_PRESET_1 if saved.preset.name == PRESET_NAMES[0]
-                else DOMESTIC_PRESET_2
+                else DOMESTIC_PRESET_2 if saved.preset.name == PRESET_NAMES[1]
+                else saved.preset.name
             )
             result = run_domestic_preset(
                 saved.preset, signal_bundle, execution_bundle, market,
@@ -738,7 +825,17 @@ def main() -> None:
 
     preset_name = _preset_buttons()
     start_date, end_date = _period_controls()
-    domestic_execution = preset_name in DOMESTIC_PRESET_NAMES
+    user_record = None
+    if preset_name.startswith(USER_PRESET_PREFIX):
+        user_record = _user_presets().get(preset_name.removeprefix(USER_PRESET_PREFIX))
+        if user_record is None:
+            st.warning("저장된 사용자 프리셋을 찾지 못해 프리셋 1로 돌아갑니다.")
+            preset_name = PRESET_NAMES[0]
+            st.session_state.preset_name = preset_name
+    domestic_execution = (
+        user_record.domestic_execution if user_record is not None
+        else preset_name in DOMESTIC_PRESET_NAMES
+    )
     combined_weight = 50
     if preset_name in COMBINED_PRESET_NAMES:
         with st.container(border=True):
@@ -764,7 +861,9 @@ def main() -> None:
                 st.caption("신호는 프리셋 1·2의 미국 ETF로 각각 계산하고, 표의 국내 ETF를 다음 한국 거래일에 매수합니다.")
         edited = PRESETS[PRESET_NAMES[0]]
     else:
-        if preset_name == DOMESTIC_PRESET_1:
+        if user_record is not None:
+            base = user_record.strategy
+        elif preset_name == DOMESTIC_PRESET_1:
             base = PRESETS[PRESET_NAMES[0]]
         elif preset_name == DOMESTIC_PRESET_2:
             base = PRESETS[PRESET_NAMES[1]]
@@ -772,6 +871,7 @@ def main() -> None:
             base = PRESETS[preset_name]
         with st.expander("전략 조건 편집", expanded=True):
             edited = _strategy_controls(base, domestic_execution=domestic_execution)
+        _save_user_preset_controls(edited, domestic_execution)
 
     with st.container(border=True):
         st.subheader("⚙️ 기본 설정")
