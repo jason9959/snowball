@@ -5,7 +5,9 @@ from pathlib import Path
 import pandas as pd
 
 from snowball.data.market_data import (
+    calculate_spy_distribution_yield,
     compare_dividend_snapshots,
+    correct_estimated_sp500_dividend_yield,
     load_sp500_dividend_yield,
     parse_multpl_dividend_yield,
 )
@@ -116,6 +118,44 @@ class DividendYieldTests(unittest.TestCase):
             baseline, candidate, "2024-02-01", "2024-03-31",
         )
         self.assertEqual(compared["상태"].tolist(), ["변경", "신규"])
+
+    def test_spy_yield_uses_raw_close_and_trailing_365_day_distributions(self):
+        history = pd.DataFrame(
+            {
+                "Close": [100.0, 110.0, 120.0, 125.0],
+                "Dividends": [1.0, 1.0, 1.0, 0.0],
+            },
+            index=pd.to_datetime(["2023-03-31", "2023-09-29", "2024-03-28", "2024-03-29"]),
+        )
+        result = calculate_spy_distribution_yield(history)
+        self.assertAlmostEqual(result.loc["2024-03-31", "SPY_TTM_DISTRIBUTION"], 2.0)
+        self.assertAlmostEqual(result.loc["2024-03-31", "SPY_CLOSE"], 125.0)
+        self.assertAlmostEqual(result.loc["2024-03-31", "SPY_DISTRIBUTION_YIELD"], 1.6)
+
+    def test_only_estimates_are_replaced_by_prior_confirmed_spy_spread(self):
+        index = pd.date_range("2023-01-31", periods=15, freq="ME")
+        multpl = pd.Series([1.50] * 12 + [1.40, 1.39, 1.38], index=index, name="SP500_DIV_YIELD")
+        multpl.attrs.update({
+            "estimate_months": [str(period) for period in index[-3:].to_period("M")],
+            "snapshot_id": "multpl-test",
+        })
+        spy = pd.Series([1.40] * 15, index=index, name="SPY_DISTRIBUTION_YIELD")
+        spy.attrs["snapshot_id"] = "spy-test"
+        corrected = correct_estimated_sp500_dividend_yield(multpl, spy)
+        self.assertEqual(corrected.iloc[:12].tolist(), multpl.iloc[:12].tolist())
+        self.assertEqual(corrected.iloc[-3:].round(6).tolist(), [1.50, 1.50, 1.50])
+        self.assertEqual(corrected.attrs["corrected_months"], ["2024-01", "2024-02", "2024-03"])
+        self.assertEqual(corrected.attrs["raw_multpl_values"]["2024-03"], 1.38)
+
+    def test_estimate_falls_back_when_calibration_history_is_too_short(self):
+        index = pd.date_range("2024-01-31", periods=3, freq="ME")
+        multpl = pd.Series([1.5, 1.4, 1.3], index=index)
+        multpl.attrs.update({"estimate_months": ["2024-03"], "snapshot_id": "m"})
+        spy = pd.Series([1.4, 1.3, 1.2], index=index)
+        spy.attrs["snapshot_id"] = "s"
+        corrected = correct_estimated_sp500_dividend_yield(multpl, spy)
+        self.assertEqual(corrected.iloc[-1], 1.3)
+        self.assertEqual(corrected.attrs["fallback_estimate_months"], ["2024-03"])
 
 
 if __name__ == "__main__":

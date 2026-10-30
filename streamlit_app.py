@@ -17,13 +17,15 @@ from snowball.core.engine import resolve_recent_period
 from snowball.app_state import SavedRun
 from snowball.data.market_data import (
     compare_dividend_snapshots,
+    correct_estimated_sp500_dividend_yield,
     download_latest_sp500_dividend_snapshot,
     load_sp500_dividend_yield,
+    load_spy_distribution_yield,
     load_treasury_spreads,
 )
 from snowball.data.prices import PriceBundle, download_yahoo_prices
 from snowball.domestic import DOMESTIC_EXECUTION_MAP, domestic_label, domestic_symbols
-from snowball.exports import diagnostic_frames, diagnostic_zip
+from snowball.exports import diagnostic_frames, diagnostic_zip, market_data_export
 from snowball.presets import MomentumSpec, PRESETS, PortfolioPreset, SpreadRule
 from snowball.service import (
     run_blended_presets,
@@ -431,7 +433,27 @@ def _market_data(signals: tuple[str, ...], start_iso: str, end_iso: str, mode: s
         spread_ids.add("T10Y3M")
     result.update(load_treasury_spreads(spread_ids, start_iso, end_iso, mode=mode))
     if "S&P500 배당수익률" in signals:
-        result["SP500_DIV_YIELD"] = load_sp500_dividend_yield(start_iso, end_iso, mode=mode)
+        requested_start = pd.Timestamp(start_iso).to_period("M").to_timestamp("M")
+        calibration_start = requested_start - pd.DateOffset(months=48)
+        multpl = load_sp500_dividend_yield(
+            calibration_start.date().isoformat(), end_iso, mode=mode,
+        )
+        try:
+            spy = load_spy_distribution_yield(
+                calibration_start.date().isoformat(), end_iso, mode=mode,
+            )
+            dividend = correct_estimated_sp500_dividend_yield(multpl, spy)
+        except (ValueError, OSError, RuntimeError) as error:
+            dividend = multpl.copy()
+            dividend.attrs.update(dict(multpl.attrs))
+            dividend.attrs.update({
+                "source": "Multpl (SPY correction unavailable)",
+                "spy_correction_error": str(error),
+                "corrected_months": [],
+                "fallback_estimate_months": list(multpl.attrs.get("estimate_months", [])),
+            })
+        result["SP500_DIV_YIELD"] = dividend.loc[requested_start:]
+        result["SP500_DIV_YIELD"].attrs.update(dict(dividend.attrs))
     return result
 
 
@@ -523,22 +545,7 @@ def _return_cell_style(value: object) -> str:
 
 
 def _market_snapshot_table(result: dict) -> pd.DataFrame:
-    rows: list[dict[str, object]] = []
-    market = result.get("engine_config", {}).get("_market_data", {})
-    for indicator, series in market.items():
-        observations = series.attrs.get("observation_dates", {})
-        for date, value in series.items():
-            month = str(pd.Timestamp(date).to_period("M"))
-            rows.append({
-                "관측 월": month,
-                "지표": indicator,
-                "원시값": float(value),
-                "실제 관측일": observations.get(month),
-                "출처": series.attrs.get("source", "-"),
-                "스냅샷 ID": series.attrs.get("snapshot_id", "-"),
-                "모드": series.attrs.get("snapshot_mode", "-"),
-            })
-    return pd.DataFrame(rows)
+    return market_data_export(result)
 
 
 def _show_results(result: dict, bundle: PriceBundle) -> None:

@@ -24,6 +24,8 @@ RUNTIME_SPREAD_CSV = Path(".cache") / "treasury_spreads_monthly.csv"
 MULTPL_DIVIDEND_URL = "https://www.multpl.com/s-p-500-dividend-yield/table/by-month"
 PACKAGED_DIVIDEND_CSV = Path(__file__).with_name("data") / "sp500_dividend_yield_monthly.csv"
 RUNTIME_DIVIDEND_CSV = Path(".cache") / "sp500_dividend_yield_monthly.csv"
+PACKAGED_SPY_DIVIDEND_CSV = Path(__file__).with_name("data") / "spy_distribution_yield_monthly.csv"
+RUNTIME_SPY_DIVIDEND_CSV = Path(".cache") / "spy_distribution_yield_monthly.csv"
 SNAPSHOT_MODES = {"fixed", "latest", "refresh_missing"}
 
 
@@ -241,6 +243,205 @@ def load_sp500_dividend_yield(
             ].to_period("M")
         ],
         **fetched_provenance,
+    })
+    return result
+
+
+def calculate_spy_distribution_yield(history: pd.DataFrame) -> pd.DataFrame:
+    """Calculate State Street-style trailing-365-day SPY distribution yield.
+
+    Raw close is required: adjusted close already contains distributions and
+    would count them twice.  Dividend availability is keyed by ex-date.
+    """
+    required = {"Close", "Dividends"}
+    if history.empty or not required.issubset(history.columns):
+        raise ValueError("SPY 가격 자료에 Close와 Dividends 열이 필요합니다.")
+    frame = history[list(required)].copy()
+    frame.index = pd.DatetimeIndex(frame.index)
+    if frame.index.tz is not None:
+        frame.index = frame.index.tz_localize(None)
+    frame.index = frame.index.normalize()
+    frame["Close"] = pd.to_numeric(frame["Close"], errors="coerce")
+    frame["Dividends"] = pd.to_numeric(frame["Dividends"], errors="coerce").fillna(0.0)
+    frame = frame.sort_index()
+    closes = frame["Close"].dropna().groupby(frame["Close"].dropna().index.to_period("M")).last()
+    rows: list[dict[str, object]] = []
+    for period, close in closes.items():
+        month_end = period.to_timestamp("M")
+        trailing = frame.loc[
+            (frame.index > month_end - pd.Timedelta(days=365))
+            & (frame.index <= month_end),
+            "Dividends",
+        ].sum()
+        rows.append({
+            "Date": month_end,
+            "SPY_TTM_DISTRIBUTION": float(trailing),
+            "SPY_CLOSE": float(close),
+            "SPY_DISTRIBUTION_YIELD": float(trailing / close * 100.0),
+        })
+    if not rows:
+        raise ValueError("SPY 월별 분배수익률을 계산하지 못했습니다.")
+    return pd.DataFrame(rows).set_index("Date")
+
+
+def _download_spy_distribution_yield(start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
+    try:
+        import yfinance as yf
+    except ImportError as error:
+        raise RuntimeError("SPY 분배수익률 갱신에는 yfinance가 필요합니다.") from error
+    history = yf.Ticker("SPY").history(
+        start=(start - pd.Timedelta(days=370)).date().isoformat(),
+        end=(end + pd.Timedelta(days=2)).date().isoformat(),
+        auto_adjust=False,
+        actions=True,
+    )
+    result = calculate_spy_distribution_yield(history).loc[start:end]
+    if result.empty:
+        raise ValueError("Yahoo Finance에서 SPY 분배수익률을 가져오지 못했습니다.")
+    digest = hashlib.sha256(
+        result.to_csv(date_format="%Y-%m-%d").encode("utf-8")
+    ).hexdigest()
+    result.attrs.update({
+        "source": "Yahoo Finance SPY prices and distributions",
+        "source_url": "https://finance.yahoo.com/quote/SPY/history/",
+        "method_url": "https://www.ssga.com/us/en/intermediary/etfs/state-street-spdr-sp-500-etf-trust-spy",
+        "retrieved_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "sha256": digest,
+    })
+    return result
+
+
+def _read_spy_dividend_csv(path: Path) -> pd.DataFrame:
+    columns = ["SPY_TTM_DISTRIBUTION", "SPY_CLOSE", "SPY_DISTRIBUTION_YIELD"]
+    if not path.exists():
+        return pd.DataFrame(columns=columns)
+    frame = pd.read_csv(path)
+    if "Date" not in frame.columns or not set(columns).issubset(frame.columns):
+        raise ValueError(f"SPY 분배수익률 CSV 형식이 올바르지 않습니다: {path}")
+    frame["Date"] = pd.to_datetime(frame["Date"], errors="coerce")
+    for column in columns:
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    frame = frame.dropna(subset=["Date", "SPY_DISTRIBUTION_YIELD"]).set_index("Date").sort_index()
+    frame.index = frame.index.to_period("M").to_timestamp("M")
+    return frame[columns].groupby(level=0).last()
+
+
+def load_spy_distribution_yield(
+    start_iso: str,
+    end_iso: str,
+    *,
+    packaged_path: Path = PACKAGED_SPY_DIVIDEND_CSV,
+    cache_path: Path = RUNTIME_SPY_DIVIDEND_CSV,
+    mode: str = "refresh_missing",
+) -> pd.Series:
+    """Load a reproducible monthly SPY trailing distribution-yield series."""
+    if mode not in SNAPSHOT_MODES:
+        raise ValueError(f"지원하지 않는 스냅샷 모드: {mode}")
+    start = pd.Timestamp(start_iso).to_period("M").to_timestamp("M")
+    end = pd.Timestamp(end_iso).to_period("M").to_timestamp("M")
+    required = pd.period_range(start, end, freq="M")
+    packaged = _read_spy_dividend_csv(packaged_path)
+    cached = pd.DataFrame(columns=packaged.columns)
+    if mode != "fixed":
+        try:
+            cached = _read_spy_dividend_csv(cache_path)
+        except (ValueError, OSError, pd.errors.ParserError):
+            pass
+    combined = packaged.copy() if mode == "fixed" else pd.concat([packaged, cached]).groupby(level=0).last().sort_index()
+    available = combined["SPY_DISTRIBUTION_YIELD"].dropna().index.to_period("M")
+    missing = required.difference(available)
+    provenance: dict[str, object] = {}
+    should_fetch = mode == "latest" or (mode == "refresh_missing" and len(missing))
+    if should_fetch:
+        fetched = _download_spy_distribution_yield(start, end)
+        provenance = dict(fetched.attrs)
+        combined = pd.concat([combined, fetched]).groupby(level=0).last().sort_index()
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = cache_path.with_suffix(".tmp")
+            combined.rename_axis("Date").reset_index().to_csv(temp_path, index=False, date_format="%Y-%m-%d")
+            temp_path.replace(cache_path)
+        except OSError:
+            pass
+    available = combined["SPY_DISTRIBUTION_YIELD"].dropna().index.to_period("M")
+    unresolved = required.difference(available)
+    result = combined.loc[start:end, "SPY_DISTRIBUTION_YIELD"].dropna().astype(float).rename("SPY_DISTRIBUTION_YIELD")
+    if result.empty:
+        raise ValueError("요청 기간에 사용할 수 있는 SPY 분배수익률 자료가 없습니다.")
+    result.attrs.update({
+        "source": "Yahoo Finance SPY prices and distributions",
+        "snapshot_id": (
+            f"yahoo-spy-dividend-{str(provenance.get('sha256'))[:12]}"
+            if provenance.get("sha256")
+            else _file_snapshot_id(packaged_path, "bundled-spy-dividend")
+        ),
+        "snapshot_mode": mode,
+        "method": "trailing 365-day distributions divided by raw month-end close",
+        "missing_months": [str(value) for value in unresolved],
+        **provenance,
+    })
+    return result
+
+
+def correct_estimated_sp500_dividend_yield(
+    multpl: pd.Series,
+    spy: pd.Series,
+    *,
+    calibration_months: int = 36,
+    minimum_calibration_months: int = 12,
+) -> pd.Series:
+    """Replace only Multpl estimates with a level-adjusted SPY proxy.
+
+    The rolling median spread is calculated strictly from earlier confirmed
+    Multpl observations, preventing look-ahead in historical decisions.
+    """
+    result = multpl.astype(float).copy()
+    estimate_periods = {str(value) for value in multpl.attrs.get("estimate_months", [])}
+    raw_values = {str(index.to_period("M")): float(value) for index, value in multpl.items()}
+    spy_values: dict[str, float] = {}
+    spreads: dict[str, float] = {}
+    corrected: list[str] = []
+    fallback: list[str] = []
+    aligned_spy = spy.reindex(result.index)
+    confirmed_mask = pd.Series(
+        [str(index.to_period("M")) not in estimate_periods for index in result.index],
+        index=result.index,
+    )
+    for index in result.index:
+        period = str(index.to_period("M"))
+        if period not in estimate_periods:
+            continue
+        spy_value = aligned_spy.get(index)
+        prior = pd.concat(
+            [result.loc[result.index < index].rename("multpl"), aligned_spy.loc[aligned_spy.index < index].rename("spy")],
+            axis=1,
+        ).dropna()
+        prior = prior.loc[confirmed_mask.reindex(prior.index).fillna(False)].tail(calibration_months)
+        if pd.isna(spy_value) or len(prior) < minimum_calibration_months:
+            fallback.append(period)
+            continue
+        spread = float((prior["multpl"] - prior["spy"]).median())
+        result.loc[index] = float(spy_value) + spread
+        spy_values[period] = float(spy_value)
+        spreads[period] = spread
+        corrected.append(period)
+    digest = hashlib.sha256(
+        (str(multpl.attrs.get("snapshot_id", "")) + str(spy.attrs.get("snapshot_id", ""))
+         + "|".join(f"{key}:{result.loc[pd.Period(key).to_timestamp('M')]:.12g}" for key in corrected)).encode("utf-8")
+    ).hexdigest()[:12]
+    result.name = "SP500_DIV_YIELD"
+    result.attrs.update(dict(multpl.attrs))
+    result.attrs.update({
+        "source": "Multpl confirmed + level-adjusted SPY estimate proxy",
+        "snapshot_id": f"hybrid-dividend-{digest}",
+        "multpl_snapshot_id": multpl.attrs.get("snapshot_id"),
+        "spy_snapshot_id": spy.attrs.get("snapshot_id"),
+        "raw_multpl_values": raw_values,
+        "spy_distribution_yields": spy_values,
+        "correction_spreads": spreads,
+        "corrected_months": corrected,
+        "fallback_estimate_months": fallback,
+        "correction_method": f"SPY trailing yield + prior {calibration_months}-month median confirmed spread",
     })
     return result
 
