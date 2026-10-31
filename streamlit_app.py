@@ -40,14 +40,16 @@ st.set_page_config(page_title="Snowball Portfolio Lab", page_icon="❄️", layo
 
 PRESET_NAMES = tuple(PRESETS)
 PRESET_7_NAME = "7. 집중투자 공격형 1-3-6-9-12"
+PRESET_9_NAME = "9. MDD 개선 공격형"
 COMBINED_PRESET_NAME = "3. 프리셋 결합"
 DOMESTIC_PRESET_1 = "4. 국내 분산투자 방어형"
 DOMESTIC_PRESET_2 = "5. 국내 집중투자 공격형"
 DOMESTIC_COMBINED_PRESET_NAME = "6. 국내 프리셋 결합"
 ALTERNATIVE_COMBINED_PRESET_NAME = "8. 프리셋 1 + 7 결합"
+OPTIMIZED_COMBINED_PRESET_NAME = "10. 프리셋 1 + 9 결합"
 COMBINED_PRESET_NAMES = {
     COMBINED_PRESET_NAME, DOMESTIC_COMBINED_PRESET_NAME,
-    ALTERNATIVE_COMBINED_PRESET_NAME,
+    ALTERNATIVE_COMBINED_PRESET_NAME, OPTIMIZED_COMBINED_PRESET_NAME,
 }
 DOMESTIC_PRESET_NAMES = {
     DOMESTIC_PRESET_1, DOMESTIC_PRESET_2, DOMESTIC_COMBINED_PRESET_NAME,
@@ -232,6 +234,15 @@ def _preset_buttons() -> str:
         st.rerun()
     if right.button(ALTERNATIVE_COMBINED_PRESET_NAME, use_container_width=True, type="primary" if st.session_state.get("preset_name", PRESET_NAMES[0]) == ALTERNATIVE_COMBINED_PRESET_NAME else "secondary"):
         st.session_state.preset_name = ALTERNATIVE_COMBINED_PRESET_NAME
+        st.session_state.form_version = st.session_state.get("form_version", 0) + 1
+        st.rerun()
+    left, right = st.columns(2)
+    if left.button(PRESET_9_NAME, use_container_width=True, type="primary" if st.session_state.get("preset_name", PRESET_NAMES[0]) == PRESET_9_NAME else "secondary"):
+        st.session_state.preset_name = PRESET_9_NAME
+        st.session_state.form_version = st.session_state.get("form_version", 0) + 1
+        st.rerun()
+    if right.button(OPTIMIZED_COMBINED_PRESET_NAME, use_container_width=True, type="primary" if st.session_state.get("preset_name", PRESET_NAMES[0]) == OPTIMIZED_COMBINED_PRESET_NAME else "secondary"):
+        st.session_state.preset_name = OPTIMIZED_COMBINED_PRESET_NAME
         st.session_state.form_version = st.session_state.get("form_version", 0) + 1
         st.rerun()
     selected = st.session_state.get("preset_name", PRESET_NAMES[0])
@@ -778,14 +789,19 @@ def _execute(saved: SavedRun) -> tuple[dict, PriceBundle]:
         )
     else:
         bundle = signal_bundle
-        is_alternative_blend = saved.secondary_preset.name == PRESET_7_NAME
+        if saved.secondary_preset.name == PRESET_7_NAME:
+            combined_name, second_label = ALTERNATIVE_COMBINED_PRESET_NAME, "프리셋 7"
+        elif saved.secondary_preset.name == PRESET_9_NAME:
+            combined_name, second_label = OPTIMIZED_COMBINED_PRESET_NAME, "프리셋 9"
+        else:
+            combined_name, second_label = COMBINED_PRESET_NAME, "프리셋 2"
         result = run_blended_presets(
             saved.preset, saved.secondary_preset, saved.preset1_weight,
             bundle, market, saved.start_date, saved.end_date,
             initial_investment=saved.initial_investment,
             transaction_cost_rate=saved.transaction_cost_rate,
-            preset_name=(ALTERNATIVE_COMBINED_PRESET_NAME if is_alternative_blend else COMBINED_PRESET_NAME),
-            second_label=("프리셋 7" if is_alternative_blend else "프리셋 2"),
+            preset_name=combined_name,
+            second_label=second_label,
         )
     price_hash = hashlib.sha256(
         pd.util.hash_pandas_object(bundle.adjusted_close, index=True).values.tobytes()
@@ -819,6 +835,8 @@ def main() -> None:
                 st.session_state.preset_name = DOMESTIC_COMBINED_PRESET_NAME
             elif saved.secondary_preset.name == PRESET_7_NAME:
                 st.session_state.preset_name = ALTERNATIVE_COMBINED_PRESET_NAME
+            elif saved.secondary_preset.name == PRESET_9_NAME:
+                st.session_state.preset_name = OPTIMIZED_COMBINED_PRESET_NAME
             else:
                 st.session_state.preset_name = COMBINED_PRESET_NAME
             st.session_state.combined_preset1_weight = int(round(saved.preset1_weight * 100))
@@ -852,7 +870,11 @@ def main() -> None:
                 value=50, step=5,
                 key="combined_preset1_weight",
             ))
-            second_number = 7 if preset_name == ALTERNATIVE_COMBINED_PRESET_NAME else 2
+            second_number = (
+                7 if preset_name == ALTERNATIVE_COMBINED_PRESET_NAME
+                else 9 if preset_name == OPTIMIZED_COMBINED_PRESET_NAME
+                else 2
+            )
             st.caption(
                 f"프리셋 1 {combined_weight}% + 프리셋 {second_number} {100 - combined_weight}%로 "
                 "각 전략의 리밸런싱 종목과 일별 성과를 결합합니다."
@@ -920,6 +942,8 @@ def main() -> None:
             secondary_preset=(
                 PRESETS[PRESET_7_NAME]
                 if preset_name == ALTERNATIVE_COMBINED_PRESET_NAME
+                else PRESETS[PRESET_9_NAME]
+                if preset_name == OPTIMIZED_COMBINED_PRESET_NAME
                 else PRESETS[PRESET_NAMES[1]] if preset_name in COMBINED_PRESET_NAMES else None
             ),
             preset1_weight=combined_weight / 100.0 if preset_name in COMBINED_PRESET_NAMES else 1.0,

@@ -47,6 +47,19 @@ class PresetTests(unittest.TestCase):
         self.assertEqual(alternative.spread_10y3m, original.spread_10y3m)
         self.assertEqual(alternative.dividend_threshold, original.dividend_threshold)
 
+    def test_mdd_improved_preset_locks_the_researched_settings(self):
+        alternative = get_preset("7. 집중투자 공격형 1-3-6-9-12")
+        improved = get_preset("9. MDD 개선 공격형")
+        self.assertEqual(improved.attack_tickers, alternative.attack_tickers)
+        self.assertEqual(improved.defense_tickers, alternative.defense_tickers)
+        self.assertEqual(improved.attack_relative, alternative.attack_relative)
+        self.assertEqual(improved.attack_absolute, alternative.attack_absolute)
+        self.assertEqual(improved.defense_relative, alternative.defense_relative)
+        self.assertEqual(improved.canary_momentum, alternative.canary_momentum)
+        self.assertEqual(improved.market_signals, alternative.market_signals)
+        self.assertEqual(improved.spread_10y3m, alternative.spread_10y3m)
+        self.assertAlmostEqual(improved.dividend_threshold, 1.9)
+
     def test_unknown_preset_is_actionable_value_error(self):
         with self.assertRaisesRegex(ValueError, "알 수 없는 프리셋"):
             get_preset("없는 전략")

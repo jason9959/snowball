@@ -147,6 +147,20 @@ class PresetExecutionTests(unittest.TestCase):
         self.assertIn("프리셋 7 선택", result["history"].columns)
         self.assertAlmostEqual(result["history"].iloc[0]["프리셋 7 비중"], 0.5)
 
+    def test_preset_ten_combines_one_and_nine(self):
+        result = run_blended_presets(
+            PRESETS["1. 분산투자 방어형"],
+            PRESETS["9. MDD 개선 공격형"],
+            0.5, self.bundle, self.market_data,
+            dt.date(2010, 1, 1), dt.date(2012, 12, 31),
+            preset_name="10. 프리셋 1 + 9 결합",
+            second_label="프리셋 9",
+        )
+        self.assertEqual(result["preset_name"], "10. 프리셋 1 + 9 결합")
+        self.assertEqual(result["sleeve_labels"], ("프리셋 1", "프리셋 9"))
+        self.assertIn("프리셋 9 선택", result["history"].columns)
+        self.assertAlmostEqual(result["history"].iloc[0]["프리셋 9 비중"], 0.5)
+
 
 if __name__ == "__main__":
     unittest.main()

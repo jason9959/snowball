@@ -219,6 +219,19 @@ PRESETS: dict[str, PortfolioPreset] = {
         market_signals=("장단기 금리차 역전 (10년-3개월)", "S&P500 배당수익률"),
         spread_10y3m=SpreadRule(7, 8, -0.5), dividend_threshold=1.6,
     ),
+    "9. MDD 개선 공격형": PortfolioPreset(
+        name="9. MDD 개선 공격형",
+        attack_tickers=("QQQ", "SCHD", "VWO"),
+        defense_tickers=("GLD", "HYG", "PDBC"),
+        attack_mode="상대 모멘텀", attack_select_count=1,
+        attack_relative=S136912, attack_absolute=S136912,
+        defense_mode="상대 & 절대 모멘텀 + 현금 스위치", defense_select_count=1,
+        defense_relative=MA6, defense_absolute=MA6,
+        canary_tickers=("TIP",), canary_momentum=MomentumSpec("이동평균", 12),
+        canary_decision_percent_digits=None,
+        market_signals=("장단기 금리차 역전 (10년-3개월)", "S&P500 배당수익률"),
+        spread_10y3m=SpreadRule(7, 8, -0.5), dividend_threshold=1.9,
+    ),
 }
 
 for _preset in PRESETS.values():
