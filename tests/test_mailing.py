@@ -7,6 +7,7 @@ from snowball.mailing import (
     first_xnys_session,
     is_month_end_xnys_session,
     load_mailing_portfolios,
+    next_xkrx_session,
     next_xnys_session,
     render_email,
 )
@@ -23,6 +24,7 @@ class MailingTests(unittest.TestCase):
     def test_month_end_close_targets_next_month_first_session(self):
         self.assertTrue(is_month_end_xnys_session(dt.date(2026, 10, 30)))
         self.assertEqual(next_xnys_session(dt.date(2026, 10, 30)), dt.date(2026, 11, 2))
+        self.assertEqual(next_xkrx_session(dt.date(2026, 10, 30)), dt.date(2026, 11, 2))
         self.assertFalse(is_month_end_xnys_session(dt.date(2026, 10, 29)))
 
     def test_loads_blended_portfolio(self):
@@ -36,6 +38,7 @@ class MailingTests(unittest.TestCase):
         recommendation = RebalanceRecommendation(
             title="테스트",
             trade_date=dt.date(2026, 11, 2),
+            domestic_trade_date=dt.date(2026, 11, 2),
             decision_date=dt.date(2026, 10, 30),
             selection="QQQ 50.0%, GLD 50.0%",
             domestic_selection="449190 · KODEX 미국나스닥100(H) 50.0%, 411060 · ACE KRX금현물 50.0%",

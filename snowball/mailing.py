@@ -42,6 +42,7 @@ class MailingPortfolio:
 class RebalanceRecommendation:
     title: str
     trade_date: dt.date
+    domestic_trade_date: dt.date
     decision_date: dt.date
     selection: str
     domestic_selection: str
@@ -103,11 +104,20 @@ def is_first_xnys_session(day: dt.date) -> bool:
 
 def next_xnys_session(day: dt.date) -> dt.date:
     """Return the first NYSE session strictly after ``day``."""
+    return _next_exchange_session("XNYS", day)
+
+
+def next_xkrx_session(day: dt.date) -> dt.date:
+    """Return the first Korea Exchange session strictly after ``day``."""
+    return _next_exchange_session("XKRX", day)
+
+
+def _next_exchange_session(calendar_name: str, day: dt.date) -> dt.date:
     try:
         import exchange_calendars as xcals
     except ImportError as error:
         raise RuntimeError("exchange-calendars 패키지가 필요합니다.") from error
-    calendar = xcals.get_calendar("XNYS")
+    calendar = xcals.get_calendar(calendar_name)
     session = calendar.date_to_session(pd.Timestamp(day), direction="next")
     if pd.Timestamp(session).date() == day:
         session = calendar.next_session(session)
@@ -228,6 +238,7 @@ def generate_recommendations(
         output.append(RebalanceRecommendation(
             title=record.title,
             trade_date=trade_date,
+            domestic_trade_date=next_xkrx_session(decision_date),
             decision_date=pd.Timestamp(row["판단 기준일"]).date(),
             selection=str(row["선택된 종목"]),
             domestic_selection=_domestic_equivalent(str(row["선택된 종목"])),
@@ -251,6 +262,8 @@ def render_email(recommendations: Iterable[RebalanceRecommendation]) -> tuple[st
         text_lines.extend([
             record.title,
             f"- 판단 기준일: {record.decision_date:%Y-%m-%d}",
+            f"- 미국 ETF 매수 예정일: {record.trade_date:%Y-%m-%d}",
+            f"- 국내 ETF 매수 제안일: {record.domestic_trade_date:%Y-%m-%d}",
             f"- 미국 ETF 목표 비중: {record.selection}",
             f"- 국내 ETF 대체 제안(검증 중): {record.domestic_selection}",
         ])
@@ -264,6 +277,8 @@ def render_email(recommendations: Iterable[RebalanceRecommendation]) -> tuple[st
             '<div style="border:1px solid #e2e5ec;border-radius:12px;padding:16px;margin:12px 0">'
             f"<h3 style=\"margin:0 0 10px\">{html.escape(record.title)}</h3>"
             f"<p style=\"margin:4px 0\"><b>판단 기준일</b>: {record.decision_date:%Y-%m-%d}</p>"
+            f"<p style=\"margin:4px 0\"><b>미국 ETF 매수 예정일</b>: {record.trade_date:%Y-%m-%d}</p>"
+            f"<p style=\"margin:4px 0\"><b>국내 ETF 매수 제안일</b>: {record.domestic_trade_date:%Y-%m-%d}</p>"
             f"<p style=\"margin:4px 0\"><b>미국 ETF 목표 비중</b>: {html.escape(record.selection)}</p>"
             f"<p style=\"margin:4px 0\"><b>국내 ETF 대체 제안(검증 중)</b>: "
             f"{html.escape(record.domestic_selection)}</p>"
