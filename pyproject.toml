@@ -12,6 +12,7 @@ dependencies = [
   "pandas>=2.2,<3",
   "streamlit>=1.41,<2",
   "yfinance>=0.2.54,<2",
+  "exchange-calendars>=4.5,<5",
 ]
 
 [project.scripts]

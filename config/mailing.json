@@ -1,0 +1,10 @@
+{
+  "portfolios": [
+    {
+      "title": "10. 프리셋 1 + 9 결합 (50:50)",
+      "preset": "1. 분산투자 방어형",
+      "secondary_preset": "9. MDD 개선 공격형",
+      "first_weight": 0.5
+    }
+  ]
+}

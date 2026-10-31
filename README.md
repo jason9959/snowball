@@ -36,6 +36,33 @@ Poetry가 감지되더라도 애플리케이션 자체를 별도 패키지로 �
 다른 기기에서도 복원하려면 `내 프리셋 전체 JSON 다운로드`로 백업하고
 `프리셋 JSON 불러오기`에서 다시 불러오세요.
 
+## 월간 리밸런싱 메일
+
+GitHub Actions의 `Monthly rebalance email` 작업은 매월 1~7일
+미국장 개장 전에 실행되며, 실제 메일은 해당 월의 첫 NYSE
+거래일에만 발송합니다. 직전 거래일 확정 종가로 목표 종목과
+비중을 계산하며, 알 수 없는 당일 시가를 예측하지 않습니다.
+
+기본 발송 포트폴리오는 `config/mailing.json`의 프리셋 10(1+9,
+50:50)입니다. 목록을 수정하면 여러 프리셋을 한 메일에 포함할
+수 있습니다.
+
+GitHub 저장소의 `Settings > Secrets and variables > Actions`에 다음
+Repository secrets를 추가합니다.
+
+- `SMTP_USERNAME`: Gmail 발신 계정
+- `SMTP_APP_PASSWORD`: Google 2단계 인증 후 발급한 앱 비밀번호
+- `MAIL_TO`: 수신 이메일. 여러 명은 쉼표로 구분
+
+발송 전 수동 계산 테스트:
+
+```bash
+python -m snowball.cli mail-rebalance --config config/mailing.json --date 2026-11-02 --force --dry-run
+```
+
+GitHub Actions 화면의 `Run workflow`에서도 `dry_run` 테스트 후
+실제 메일을 발송할 수 있습니다.
+
 ## 설계 원칙
 
 1. 전략 설정은 `snowball/presets.py` 한 곳에서 관리합니다.

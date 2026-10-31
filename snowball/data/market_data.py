@@ -154,6 +154,46 @@ def compare_dividend_snapshots(
     return joined.rename_axis("관측 월").reset_index()
 
 
+def load_strategy_market_data(
+    signals: tuple[str, ...],
+    start_iso: str,
+    end_iso: str,
+    *,
+    mode: str = "refresh_missing",
+) -> dict[str, pd.Series]:
+    """Load strategy signals through one path for UI and automation."""
+    result: dict[str, pd.Series] = {}
+    spread_ids: set[str] = set()
+    if "장단기 금리차 역전 (10년-2년)" in signals:
+        spread_ids.add("T10Y2Y")
+    if "장단기 금리차 역전 (10년-3개월)" in signals:
+        spread_ids.add("T10Y3M")
+    result.update(load_treasury_spreads(spread_ids, start_iso, end_iso, mode=mode))
+    if "S&P500 배당수익률" in signals:
+        requested_start = pd.Timestamp(start_iso).to_period("M").to_timestamp("M")
+        calibration_start = requested_start - pd.DateOffset(months=48)
+        multpl = load_sp500_dividend_yield(
+            calibration_start.date().isoformat(), end_iso, mode=mode,
+        )
+        try:
+            spy = load_spy_distribution_yield(
+                calibration_start.date().isoformat(), end_iso, mode=mode,
+            )
+            dividend = correct_estimated_sp500_dividend_yield(multpl, spy)
+        except (ValueError, OSError, RuntimeError) as error:
+            dividend = multpl.copy()
+            dividend.attrs.update(dict(multpl.attrs))
+            dividend.attrs.update({
+                "source": "Multpl (SPY correction unavailable)",
+                "spy_correction_error": str(error),
+                "corrected_months": [],
+                "fallback_estimate_months": list(multpl.attrs.get("estimate_months", [])),
+            })
+        result["SP500_DIV_YIELD"] = dividend.loc[requested_start:]
+        result["SP500_DIV_YIELD"].attrs.update(dict(dividend.attrs))
+    return result
+
+
 def load_sp500_dividend_yield(
     start_iso: str,
     end_iso: str,

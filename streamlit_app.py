@@ -17,11 +17,8 @@ from snowball.core.engine import resolve_recent_period
 from snowball.app_state import SavedRun
 from snowball.data.market_data import (
     compare_dividend_snapshots,
-    correct_estimated_sp500_dividend_yield,
     download_latest_sp500_dividend_snapshot,
-    load_sp500_dividend_yield,
-    load_spy_distribution_yield,
-    load_treasury_spreads,
+    load_strategy_market_data,
 )
 from snowball.data.prices import PriceBundle, download_yahoo_prices
 from snowball.domestic import DOMESTIC_EXECUTION_MAP, domestic_label, domestic_symbols
@@ -436,36 +433,7 @@ def _prices(symbols: tuple[str, ...], start_iso: str, end_iso: str) -> PriceBund
 
 @st.cache_data(ttl=24 * 60 * 60, show_spinner=False)
 def _market_data(signals: tuple[str, ...], start_iso: str, end_iso: str, mode: str) -> dict[str, pd.Series]:
-    result: dict[str, pd.Series] = {}
-    spread_ids = set()
-    if "장단기 금리차 역전 (10년-2년)" in signals:
-        spread_ids.add("T10Y2Y")
-    if "장단기 금리차 역전 (10년-3개월)" in signals:
-        spread_ids.add("T10Y3M")
-    result.update(load_treasury_spreads(spread_ids, start_iso, end_iso, mode=mode))
-    if "S&P500 배당수익률" in signals:
-        requested_start = pd.Timestamp(start_iso).to_period("M").to_timestamp("M")
-        calibration_start = requested_start - pd.DateOffset(months=48)
-        multpl = load_sp500_dividend_yield(
-            calibration_start.date().isoformat(), end_iso, mode=mode,
-        )
-        try:
-            spy = load_spy_distribution_yield(
-                calibration_start.date().isoformat(), end_iso, mode=mode,
-            )
-            dividend = correct_estimated_sp500_dividend_yield(multpl, spy)
-        except (ValueError, OSError, RuntimeError) as error:
-            dividend = multpl.copy()
-            dividend.attrs.update(dict(multpl.attrs))
-            dividend.attrs.update({
-                "source": "Multpl (SPY correction unavailable)",
-                "spy_correction_error": str(error),
-                "corrected_months": [],
-                "fallback_estimate_months": list(multpl.attrs.get("estimate_months", [])),
-            })
-        result["SP500_DIV_YIELD"] = dividend.loc[requested_start:]
-        result["SP500_DIV_YIELD"].attrs.update(dict(dividend.attrs))
-    return result
+    return load_strategy_market_data(signals, start_iso, end_iso, mode=mode)
 
 
 @st.cache_data(ttl=24 * 60 * 60, show_spinner=False)

@@ -1,0 +1,55 @@
+name: Monthly rebalance email
+
+on:
+  schedule:
+    # 12:30 UTC = 07:30/08:30 New York, before the US market opens.
+    # The command itself sends only on the first XNYS session of the month.
+    - cron: "30 12 1-7 * *"
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Optional New York date (YYYY-MM-DD)"
+        required: false
+        type: string
+      force:
+        description: "Run even when the date is not the first NYSE session"
+        required: false
+        default: false
+        type: boolean
+      dry_run:
+        description: "Calculate without sending email"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: monthly-rebalance-mail
+  cancel-in-progress: false
+
+jobs:
+  recommend-and-mail:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install project
+        run: python -m pip install .
+      - name: Calculate and send
+        shell: bash
+        env:
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_APP_PASSWORD: ${{ secrets.SMTP_APP_PASSWORD }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+        run: |
+          args=(--config config/mailing.json)
+          if [[ -n "${{ inputs.date }}" ]]; then args+=(--date "${{ inputs.date }}"); fi
+          if [[ "${{ inputs.force }}" == "true" ]]; then args+=(--force); fi
+          if [[ "${{ inputs.dry_run }}" == "true" ]]; then args+=(--dry-run); fi
+          python -m snowball.cli mail-rebalance "${args[@]}"
