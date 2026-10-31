@@ -49,10 +49,10 @@ class MailingTests(unittest.TestCase):
         self.assertIn("QQQ 50.0%, GLD 50.0%", html)
         self.assertIn("ACE KRX금현물", html)
 
-    def test_diversified_commodity_is_not_mapped_to_crude_oil(self):
+    def test_diversified_commodity_keeps_requested_crude_oil_proxy(self):
         mapped = _domestic_equivalent("PDBC 50.0%, QQQ 50.0%")
-        self.assertIn("PDBC 국내 대체 보류", mapped)
-        self.assertNotIn("130680", mapped)
+        self.assertIn("130680 · TIGER 원유선물Enhanced(H) 50.0%", mapped)
+        self.assertNotIn("국내 대체 보류", mapped)
 
 
 if __name__ == "__main__":
