@@ -1,5 +1,8 @@
 # 미국 ETF-국내 실행 ETF 1차 추적 검증
 
+> EDV의 국내 대체는 후속 후보 비교 결과 `458250 TIGER 미국30년국채스트립액티브(합성 H)`로 변경했다.
+> 최신 판단은 `research/replacement_review_commodities_edv.md`를 기준으로 한다.
+
 ## 방법
 
 - 기간: 각 국내 ETF의 가용 시작일 ~ 2026-10-31

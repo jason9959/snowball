@@ -125,6 +125,9 @@ class PresetExecutionTests(unittest.TestCase):
         self.assertEqual(DOMESTIC_EXECUTION_MAP["DBC"], "130680.KS")
         self.assertEqual(DOMESTIC_EXECUTION_MAP["PDBC"], "130680.KS")
 
+    def test_edv_uses_the_closest_tested_strip_proxy(self):
+        self.assertEqual(DOMESTIC_EXECUTION_MAP["EDV"], "458250.KS")
+
     def test_domestic_presets_have_mappings_for_every_investable_asset(self):
         for preset_name in ("1. 분산투자 방어형", "2. 집중투자 공격형"):
             preset = PRESETS[preset_name]
