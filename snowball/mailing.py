@@ -136,8 +136,14 @@ def _domestic_equivalent(selection: str) -> str:
             weight = float(percent.rstrip("%")) / 100.0
         except (ValueError, AttributeError):
             continue
-        domestic = ticker if ticker == "현금" else DOMESTIC_EXECUTION_MAP.get(ticker)
-        label = domestic_label(domestic) if domestic else f"{ticker} 대체 ETF 미정"
+        if ticker in {"DBC", "PDBC"}:
+            # A crude-oil-only ETF is not an execution equivalent for a
+            # diversified commodity basket. Keep the signal, but do not turn
+            # a known-bad proxy into an actionable recommendation.
+            label = f"{ticker} 국내 대체 보류(분산 원자재 후보 재선정 필요)"
+        else:
+            domestic = ticker if ticker == "현금" else DOMESTIC_EXECUTION_MAP.get(ticker)
+            label = domestic_label(domestic) if domestic else f"{ticker} 대체 ETF 미정"
         mapped[label] = mapped.get(label, 0.0) + weight
     return ", ".join(f"{label} {weight:.1%}" for label, weight in mapped.items())
 

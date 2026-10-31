@@ -10,6 +10,7 @@ from snowball.mailing import (
     next_xnys_session,
     render_email,
 )
+from snowball.mailing import _domestic_equivalent
 
 
 class MailingTests(unittest.TestCase):
@@ -44,6 +45,11 @@ class MailingTests(unittest.TestCase):
         self.assertIn("2026-10-30", text)
         self.assertIn("QQQ 50.0%, GLD 50.0%", html)
         self.assertIn("ACE KRX금현물", html)
+
+    def test_diversified_commodity_is_not_mapped_to_crude_oil(self):
+        mapped = _domestic_equivalent("PDBC 50.0%, QQQ 50.0%")
+        self.assertIn("PDBC 국내 대체 보류", mapped)
+        self.assertNotIn("130680", mapped)
 
 
 if __name__ == "__main__":
