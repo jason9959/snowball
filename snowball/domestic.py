@@ -9,7 +9,7 @@ DOMESTIC_EXECUTION_MAP: dict[str, str] = {
     "XLE": "218420.KS",   # KODEX 미국S&P500에너지(합성)
     "XLK": "463680.KS",   # KODEX 미국S&P500테크놀로지
     "XLV": "453640.KS",   # KODEX 미국S&P500헬스케어
-    "EDV": "304660.KS",   # KODEX 미국채울트라30년선물(H)
+    "EDV": "304660.KS",   # KODEX 미국30년국채울트라선물(H)
     "GLD": "411060.KS",   # ACE KRX금현물
     "DBC": "130680.KS",   # TIGER 원유선물Enhanced(H)
     "BIL": "329750.KS",   # TIGER 미국달러단기채권액티브
@@ -26,7 +26,7 @@ DOMESTIC_NAMES: dict[str, str] = {
     "218420.KS": "KODEX 미국S&P500에너지(합성)",
     "463680.KS": "KODEX 미국S&P500테크놀로지",
     "453640.KS": "KODEX 미국S&P500헬스케어",
-    "304660.KS": "KODEX 미국채울트라30년선물(H)",
+    "304660.KS": "KODEX 미국30년국채울트라선물(H)",
     "411060.KS": "ACE KRX금현물",
     "130680.KS": "TIGER 원유선물Enhanced(H)",
     "329750.KS": "TIGER 미국달러단기채권액티브",

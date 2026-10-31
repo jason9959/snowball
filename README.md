@@ -38,10 +38,12 @@ Poetry가 감지되더라도 애플리케이션 자체를 별도 패키지로 �
 
 ## 월간 리밸런싱 메일
 
-GitHub Actions의 `Monthly rebalance email` 작업은 매월 1~7일
-미국장 개장 전에 실행되며, 실제 메일은 해당 월의 첫 NYSE
-거래일에만 발송합니다. 직전 거래일 확정 종가로 목표 종목과
-비중을 계산하며, 알 수 없는 당일 시가를 예측하지 않습니다.
+GitHub Actions의 `Monthly rebalance email` 작업은 매 미국 거래일
+장 마감 후에 실행됩니다. 다음 NYSE 거래일이 새로운 달의 첫
+거래일일 때만, 방금 확정된 종가로 목표 종목과 비중을 계산해
+메일을 발송합니다. 다음 거래일 시가 매수를 위한 신호이며,
+알 수 없는 시가 자체를 예측하지는 않습니다. 메일에는 미국 ETF 목표와
+현재의 국내 ETF 대체 제안이 함께 표시됩니다.
 
 기본 발송 포트폴리오는 `config/mailing.json`의 프리셋 10(1+9,
 50:50)입니다. 목록을 수정하면 여러 프리셋을 한 메일에 포함할
@@ -57,7 +59,7 @@ Repository secrets를 추가합니다.
 발송 전 수동 계산 테스트:
 
 ```bash
-python -m snowball.cli mail-rebalance --config config/mailing.json --date 2026-11-02 --force --dry-run
+python -m snowball.cli mail-rebalance --config config/mailing.json --date 2026-10-30 --force --dry-run
 ```
 
 GitHub Actions 화면의 `Run workflow`에서도 `dry_run` 테스트 후

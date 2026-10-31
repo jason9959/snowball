@@ -16,6 +16,7 @@ import pandas as pd
 
 from .data.market_data import load_strategy_market_data
 from .data.prices import PriceBundle, download_yahoo_prices
+from .domestic import DOMESTIC_EXECUTION_MAP, domestic_label
 from .presets import PRESETS, PortfolioPreset
 from .service import run_blended_presets, run_preset
 
@@ -43,6 +44,7 @@ class RebalanceRecommendation:
     trade_date: dt.date
     decision_date: dt.date
     selection: str
+    domestic_selection: str
     details: tuple[tuple[str, str], ...] = ()
 
 
@@ -97,6 +99,47 @@ def first_xnys_session(day: dt.date) -> dt.date:
 
 def is_first_xnys_session(day: dt.date) -> bool:
     return day == first_xnys_session(day)
+
+
+def next_xnys_session(day: dt.date) -> dt.date:
+    """Return the first NYSE session strictly after ``day``."""
+    try:
+        import exchange_calendars as xcals
+    except ImportError as error:
+        raise RuntimeError("exchange-calendars 패키지가 필요합니다.") from error
+    calendar = xcals.get_calendar("XNYS")
+    session = calendar.date_to_session(pd.Timestamp(day), direction="next")
+    if pd.Timestamp(session).date() == day:
+        session = calendar.next_session(session)
+    return pd.Timestamp(session).date()
+
+
+def is_month_end_xnys_session(day: dt.date) -> bool:
+    """True after the final completed NYSE session before a new month."""
+    try:
+        import exchange_calendars as xcals
+    except ImportError as error:
+        raise RuntimeError("exchange-calendars 패키지가 필요합니다.") from error
+    calendar = xcals.get_calendar("XNYS")
+    stamp = pd.Timestamp(day)
+    if not calendar.is_session(stamp):
+        return False
+    return next_xnys_session(day).month != day.month
+
+
+def _domestic_equivalent(selection: str) -> str:
+    """Map US target weights to Korean-listed execution suggestions."""
+    mapped: dict[str, float] = {}
+    for item in selection.split(", "):
+        try:
+            ticker, percent = item.rsplit(" ", 1)
+            weight = float(percent.rstrip("%")) / 100.0
+        except (ValueError, AttributeError):
+            continue
+        domestic = ticker if ticker == "현금" else DOMESTIC_EXECUTION_MAP.get(ticker)
+        label = domestic_label(domestic) if domestic else f"{ticker} 대체 ETF 미정"
+        mapped[label] = mapped.get(label, 0.0) + weight
+    return ", ".join(f"{label} {weight:.1%}" for label, weight in mapped.items())
 
 
 def _with_synthetic_trade_session(bundle: PriceBundle, trade_date: dt.date) -> tuple[PriceBundle, dt.date]:
@@ -181,6 +224,7 @@ def generate_recommendations(
             trade_date=trade_date,
             decision_date=pd.Timestamp(row["판단 기준일"]).date(),
             selection=str(row["선택된 종목"]),
+            domestic_selection=_domestic_equivalent(str(row["선택된 종목"])),
             details=tuple(details),
         ))
     return output
@@ -201,7 +245,8 @@ def render_email(recommendations: Iterable[RebalanceRecommendation]) -> tuple[st
         text_lines.extend([
             record.title,
             f"- 판단 기준일: {record.decision_date:%Y-%m-%d}",
-            f"- 목표 비중: {record.selection}",
+            f"- 미국 ETF 목표 비중: {record.selection}",
+            f"- 국내 ETF 대체 제안(검증 중): {record.domestic_selection}",
         ])
         text_lines.extend(f"- {label}: {selection}" for label, selection in record.details)
         text_lines.append("")
@@ -213,14 +258,16 @@ def render_email(recommendations: Iterable[RebalanceRecommendation]) -> tuple[st
             '<div style="border:1px solid #e2e5ec;border-radius:12px;padding:16px;margin:12px 0">'
             f"<h3 style=\"margin:0 0 10px\">{html.escape(record.title)}</h3>"
             f"<p style=\"margin:4px 0\"><b>판단 기준일</b>: {record.decision_date:%Y-%m-%d}</p>"
-            f"<p style=\"margin:4px 0\"><b>목표 비중</b>: {html.escape(record.selection)}</p>"
+            f"<p style=\"margin:4px 0\"><b>미국 ETF 목표 비중</b>: {html.escape(record.selection)}</p>"
+            f"<p style=\"margin:4px 0\"><b>국내 ETF 대체 제안(검증 중)</b>: "
+            f"{html.escape(record.domestic_selection)}</p>"
             + (f"<ul>{detail_html}</ul>" if detail_html else "") + "</div>"
         )
     text_lines.append("본 메일은 자동 계산 알림이며 매수·매도 권유가 아닙니다.")
     body_html = (
         '<div style="font-family:Arial,sans-serif;max-width:680px;color:#222">'
         f"<h2>Snowball 월간 리밸런싱</h2>"
-        f"<p><b>{trade_date:%Y-%m-%d}</b> 미국장 개장 전 목표입니다.<br>"
+        f"<p><b>{trade_date:%Y-%m-%d}</b> 미국장 시가 리밸런싱 목표입니다.<br>"
         "직전 거래일의 확정 종가로 판단했으며 당일 체결가는 예측하지 않습니다.</p>"
         + "".join(cards)
         + '<p style="font-size:12px;color:#666">자동 계산 알림이며 매수·매도 권유가 아닙니다.</p></div>'

@@ -2,17 +2,17 @@ name: Monthly rebalance email
 
 on:
   schedule:
-    # 12:30 UTC = 07:30/08:30 New York, before the US market opens.
-    # The command itself sends only on the first XNYS session of the month.
-    - cron: "30 12 1-7 * *"
+    # 22:30 UTC = 17:30/18:30 New York, after the US market closes.
+    # The command sends only when the next XNYS session belongs to a new month.
+    - cron: "30 22 * * 1-5"
   workflow_dispatch:
     inputs:
       date:
-        description: "Optional New York date (YYYY-MM-DD)"
+        description: "Optional completed New York close date (YYYY-MM-DD)"
         required: false
         type: string
       force:
-        description: "Run even when the date is not the first NYSE session"
+        description: "Run even when the date is not the final monthly NYSE session"
         required: false
         default: false
         type: boolean
