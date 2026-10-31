@@ -559,6 +559,29 @@ def _market_snapshot_table(result: dict) -> pd.DataFrame:
     return market_data_export(result)
 
 
+def _result_cache_key(result: dict) -> str:
+    """Stable key for expensive display-only exports of one completed run."""
+    nav = result["nav"]
+    nav_hash = hashlib.sha256(
+        pd.util.hash_pandas_object(nav, index=True).values.tobytes()
+    ).hexdigest()[:16]
+    snapshot = result.get("data_snapshot", {}).get("price_snapshot_id", "-")
+    return "|".join((
+        str(result.get("preset_name", "-")), str(result["common_start"]),
+        str(result["common_end"]), str(snapshot), nav_hash,
+    ))
+
+
+@st.cache_data(show_spinner=False)
+def _cached_diagnostic_zip(cache_key: str, _result: dict) -> bytes:
+    return diagnostic_zip(_result)
+
+
+@st.cache_data(show_spinner=False)
+def _cached_diagnostic_frames(cache_key: str, _result: dict) -> dict[str, pd.DataFrame]:
+    return diagnostic_frames(_result)
+
+
 def _show_results(result: dict, bundle: PriceBundle) -> None:
     metrics = result["metrics"]
     st.header("백테스트 결과")
@@ -574,18 +597,21 @@ def _show_results(result: dict, bundle: PriceBundle) -> None:
     )
     st.markdown(f'<div class="metric-grid">{cards}</div>', unsafe_allow_html=True)
     st.caption(f"실제 공통 평가기간: {result['common_start'].date()} ~ {result['common_end'].date()} · 연간 턴오버 {result['annual_turnover']:.2%}")
+    cache_key = _result_cache_key(result)
     st.download_button(
         "비교 진단자료 한 번에 다운로드 (ZIP)",
-        diagnostic_zip(result),
+        _cached_diagnostic_zip(cache_key, result),
         file_name=f"snowball_diagnostics_{result['common_start'].date()}_{result['common_end'].date()}.zip",
         mime="application/zip",
         use_container_width=True,
         help="월별 수익률, 리밸런싱, 자산·카나리아·시장 신호, 일별 NAV와 낙폭이 포함됩니다.",
     )
-    exports = diagnostic_frames(result)
-
-    tabs = st.tabs(("수익률 차트", "손실폭", "월별 수익률", "리밸런싱", "판단 원시값", "데이터 스냅샷", "적용 설정"))
-    with tabs[0]:
+    sections = ("수익률 차트", "손실폭", "월별 수익률", "리밸런싱", "판단 원시값", "데이터 스냅샷", "적용 설정")
+    section = st.radio(
+        "결과 보기", sections, horizontal=True, label_visibility="collapsed",
+        key=f"result_section_{cache_key}",
+    )
+    if section == "수익률 차트":
         nav = result["nav"]
         chart = ((nav / nav.iloc[0]) - 1.0).rename("포트폴리오").to_frame()
         benchmark = result.get("benchmark_ticker", "QQQ")
@@ -595,9 +621,10 @@ def _show_results(result: dict, bundle: PriceBundle) -> None:
                 label = "국내 나스닥100" if benchmark.endswith(".KS") else "QQQ"
                 chart.loc[qqq.index, label] = qqq / qqq.iloc[0] - 1.0
         st.line_chart(chart, y_label="누적 수익률")
-    with tabs[1]:
+    elif section == "손실폭":
         st.line_chart(result["drawdown"].to_frame(), y_label="낙폭")
-    with tabs[2]:
+    elif section == "월별 수익률":
+        exports = _cached_diagnostic_frames(cache_key, result)
         monthly = _monthly_returns(result["nav"])
         if monthly.empty:
             st.info("월별 수익률을 계산할 기간이 부족합니다.")
@@ -611,7 +638,8 @@ def _show_results(result: dict, bundle: PriceBundle) -> None:
                 mime="text/csv",
                 use_container_width=True,
             )
-    with tabs[3]:
+    elif section == "리밸런싱":
+        exports = _cached_diagnostic_frames(cache_key, result)
         if result.get("preset_name") in COMBINED_PRESET_NAMES and not result["history"].empty:
             history = result["history"]
             first_label, second_label = result.get("sleeve_labels", ("프리셋 1", "프리셋 2"))
@@ -651,7 +679,8 @@ def _show_results(result: dict, bundle: PriceBundle) -> None:
             mime="text/csv",
             use_container_width=True,
         )
-    with tabs[4]:
+    elif section == "판단 원시값":
+        exports = _cached_diagnostic_frames(cache_key, result)
         keys = list(result["candidate_snapshots"])
         if keys:
             selected = st.selectbox("리밸런싱 적용일", keys, index=len(keys) - 1)
@@ -675,7 +704,7 @@ def _show_results(result: dict, bundle: PriceBundle) -> None:
                 mime="text/csv",
                 use_container_width=True,
             )
-    with tabs[5]:
+    elif section == "데이터 스냅샷":
         metadata = result.get("data_snapshot", {})
         st.markdown("**이번 실행에 사용된 데이터 버전**")
         st.json(metadata, expanded=False)
@@ -728,7 +757,7 @@ def _show_results(result: dict, bundle: PriceBundle) -> None:
                 st.caption("고정 스냅샷은 자동으로 덮어쓰지 않습니다. 최신 후보를 검토한 뒤 별도 버전으로 승격합니다.")
             except Exception as error:
                 st.error(f"최신 스냅샷을 비교하지 못했습니다: {error}")
-    with tabs[6]:
+    elif section == "적용 설정":
         config = dict(result["engine_config"])
         config.pop("execution_prices", None)
         config.pop("_market_data", None)
@@ -923,6 +952,25 @@ def main() -> None:
             help="고정 스냅샷은 같은 과거 결과를 재현하고, 최신 데이터는 새 공급원 값을 별도 버전으로 사용합니다.",
         )
 
+    secondary_preset = (
+        PRESETS[PRESET_7_NAME]
+        if preset_name == ALTERNATIVE_COMBINED_PRESET_NAME
+        else PRESETS[PRESET_9_NAME]
+        if preset_name == OPTIMIZED_COMBINED_PRESET_NAME
+        else PRESETS[PRESET_NAMES[1]] if preset_name in COMBINED_PRESET_NAMES else None
+    )
+    current_saved = SavedRun(
+        preset=edited,
+        start_date=start_date,
+        end_date=end_date,
+        initial_investment=initial,
+        transaction_cost_rate=cost_bps / 10_000.0,
+        market_data_mode=MARKET_DATA_MODES[mode_label],
+        secondary_preset=secondary_preset,
+        preset1_weight=combined_weight / 100.0 if preset_name in COMBINED_PRESET_NAMES else 1.0,
+        domestic_execution=domestic_execution,
+    )
+
     if st.button("백테스트 실행", type="primary", use_container_width=True):
         if start_date >= end_date:
             st.error("시작일은 종료일보다 앞서야 합니다.")
@@ -932,36 +980,26 @@ def main() -> None:
         except ValueError as error:
             st.error(str(error))
             return
-        saved = SavedRun(
-            preset=edited,
-            start_date=start_date,
-            end_date=end_date,
-            initial_investment=initial,
-            transaction_cost_rate=cost_bps / 10_000.0,
-            market_data_mode=MARKET_DATA_MODES[mode_label],
-            secondary_preset=(
-                PRESETS[PRESET_7_NAME]
-                if preset_name == ALTERNATIVE_COMBINED_PRESET_NAME
-                else PRESETS[PRESET_9_NAME]
-                if preset_name == OPTIMIZED_COMBINED_PRESET_NAME
-                else PRESETS[PRESET_NAMES[1]] if preset_name in COMBINED_PRESET_NAMES else None
-            ),
-            preset1_weight=combined_weight / 100.0 if preset_name in COMBINED_PRESET_NAMES else 1.0,
-            domestic_execution=domestic_execution,
-        )
         try:
             with st.spinner("가격과 시장 데이터를 불러와 계산하고 있습니다…"):
-                result, bundle = _execute(saved)
+                result, bundle = _execute(current_saved)
             st.session_state.last_result = result
             st.session_state.last_bundle = bundle
-            st.session_state.last_saved_run = saved
-            st.query_params["run_id"] = _remember_run(saved, result, bundle)
+            st.session_state.last_saved_run = current_saved
+            st.query_params["run_id"] = _remember_run(current_saved, result, bundle)
         except Exception as error:  # Streamlit must turn provider failures into actionable UI feedback.
             st.error(f"백테스트를 완료하지 못했습니다: {error}")
 
     if "last_result" in st.session_state:
-        st.caption("마지막 결과는 새로고침하거나 이 탭을 다시 열어도 자동으로 복원됩니다.")
-        _show_results(st.session_state.last_result, st.session_state.last_bundle)
+        result_matches = st.session_state.get("last_saved_run") == current_saved
+        if result_matches:
+            st.caption("마지막 결과는 새로고침하거나 이 탭을 다시 열어도 자동으로 복원됩니다.")
+            _show_results(st.session_state.last_result, st.session_state.last_bundle)
+        else:
+            st.info("전략 조건이 변경되어 이전 백테스트 결과를 접었습니다. 새 조건으로 실행하거나 필요하면 이전 결과를 펼쳐 보세요.")
+            stale_key = hashlib.sha256(repr(current_saved).encode("utf-8")).hexdigest()[:12]
+            if st.toggle("이전 결과 보기", value=False, key=f"show_stale_result_{stale_key}"):
+                _show_results(st.session_state.last_result, st.session_state.last_bundle)
 
 
 if __name__ == "__main__":
