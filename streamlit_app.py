@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import importlib
 import secrets
 import time
 from dataclasses import replace
@@ -13,13 +14,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from snowball.account_store import (
-    DEFAULT_ACCOUNT_TAB,
-    TRADE_COLUMNS,
-    GoogleSheetAccountStore,
-    SheetSchemaError,
-    account_display_name,
-)
+from snowball import account_store as _account_store
 from snowball.accounting import (
     calculate_account_valuation,
     download_unadjusted_closes,
@@ -45,6 +40,16 @@ from snowball.service import (
     run_preset,
 )
 from snowball.user_presets import UserPreset, export_user_presets, import_user_presets
+
+
+# Streamlit Cloud can keep an already-imported module during a hot reload.
+# Reload this small schema module so a deployment and its UI always use the same version.
+_account_store = importlib.reload(_account_store)
+DEFAULT_ACCOUNT_TAB = _account_store.DEFAULT_ACCOUNT_TAB
+TRADE_COLUMNS = _account_store.TRADE_COLUMNS
+GoogleSheetAccountStore = _account_store.GoogleSheetAccountStore
+SheetSchemaError = _account_store.SheetSchemaError
+account_display_name = _account_store.account_display_name
 
 
 st.set_page_config(page_title="Snowball Portfolio Lab", page_icon="❄️", layout="wide")
