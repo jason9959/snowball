@@ -141,10 +141,12 @@ def _go_to(page: str) -> None:
 
 
 @st.cache_resource(show_spinner=False)
-def _cached_google_sheet_store_v2(
+def _cached_google_sheet_store(
     spreadsheet_id: str,
     service_account_json: str,
+    schema_version: int,
 ) -> GoogleSheetAccountStore:
+    del schema_version  # Used only to invalidate Streamlit's resource cache after schema changes.
     store = GoogleSheetAccountStore.connect(spreadsheet_id, service_account_json)
     store.ensure_schema()
     return store
@@ -162,7 +164,7 @@ def _google_sheet_store() -> tuple[GoogleSheetAccountStore | None, str | None]:
         import json
         service_account_json = json.dumps(dict(service_account_json))
     try:
-        return _cached_google_sheet_store_v2(spreadsheet_id, service_account_json), None
+        return _cached_google_sheet_store(spreadsheet_id, service_account_json, 3), None
     except (ValueError, RuntimeError, SheetSchemaError) as error:
         return None, str(error)
     except Exception as error:

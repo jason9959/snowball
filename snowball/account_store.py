@@ -60,6 +60,7 @@ class GoogleSheetAccountStore:
 
     spreadsheet: Any
     _system_schema_ready: bool = field(default=False, init=False, repr=False)
+    _normalized_account_tabs: set[str] = field(default_factory=set, init=False, repr=False)
 
     @classmethod
     def connect(
@@ -216,6 +217,17 @@ class GoogleSheetAccountStore:
             raise SheetSchemaError(
                 f"'{worksheet.title}' 탭의 첫 행이 예상 헤더와 다릅니다. 기존 데이터 보호를 위해 중단했습니다."
             )
+        if worksheet.title not in self._normalized_account_tabs:
+            timestamps = worksheet.col_values(2)
+            if len(timestamps) > 1:
+                normalized = [_normalize_kst_text(value) for value in timestamps[1:]]
+                if normalized != timestamps[1:]:
+                    worksheet.update(
+                        range_name=f"B2:B{len(timestamps)}",
+                        values=[[value] for value in normalized],
+                        raw=True,
+                    )
+            self._normalized_account_tabs.add(worksheet.title)
 
     def _ensure_headers(self, worksheet: Any, columns: tuple[str, ...]) -> None:
         first_row = tuple(str(value).strip() for value in worksheet.row_values(1))

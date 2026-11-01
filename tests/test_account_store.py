@@ -123,6 +123,17 @@ class AccountStoreTest(unittest.TestCase):
         with self.assertRaises(SheetSchemaError):
             GoogleSheetAccountStore(spreadsheet).ensure_schema()
 
+    def test_existing_account_timestamp_is_normalized(self):
+        row = ["id1", "2026-11-01T23:00:01+09:00"] + [""] * 12 + ["정상"]
+        spreadsheet = FakeSpreadsheet([
+            FakeWorksheet("계좌_일반계좌1", [list(LEGACY_TRADE_COLUMNS), row]),
+        ])
+        store = GoogleSheetAccountStore(spreadsheet)
+        store.ensure_schema()
+        loaded = store.load_transactions("계좌_일반계좌1")
+        self.assertEqual(loaded[0]["입력시각"], "2026-11-01 23:00:01")
+        self.assertEqual(spreadsheet.worksheet("계좌_일반계좌1").row_values(1), list(TRADE_COLUMNS))
+
     def test_create_append_update_and_cancel_transaction(self):
         spreadsheet = FakeSpreadsheet()
         store = GoogleSheetAccountStore(spreadsheet)
