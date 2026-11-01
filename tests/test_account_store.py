@@ -3,12 +3,24 @@ from __future__ import annotations
 import unittest
 
 from snowball.account_store import (
+    DEFAULT_ACCOUNT_TAB,
+    LEGACY_TRADE_COLUMNS,
+    SYSTEM_SHEET_SCHEMAS,
     GoogleSheetAccountStore,
-    SHEET_SCHEMAS,
     SheetSchemaError,
     TRADE_COLUMNS,
+    account_display_name,
     parse_service_account_json,
 )
+
+
+def _cell_position(address: str) -> tuple[int, int]:
+    letters = "".join(character for character in address if character.isalpha())
+    digits = "".join(character for character in address if character.isdigit())
+    column = 0
+    for character in letters:
+        column = column * 26 + ord(character.upper()) - 64
+    return int(digits or 1) - 1, column - 1
 
 
 class FakeWorksheet:
@@ -20,8 +32,18 @@ class FakeWorksheet:
     def row_values(self, number: int):
         return list(self.rows[number - 1]) if len(self.rows) >= number else []
 
-    def update(self, *, range_name: str, values: list[list[object]]):
-        self.rows = [list(values[0])]
+    def get_all_values(self):
+        return [list(row) for row in self.rows]
+
+    def update(self, *, range_name: str, values: list[list[object]], raw: bool = True):
+        start = range_name.split(":")[0]
+        row_index, column_index = _cell_position(start)
+        while len(self.rows) < row_index + len(values):
+            self.rows.append([])
+        for offset, values_row in enumerate(values):
+            target = self.rows[row_index + offset]
+            target += [""] * max(0, column_index + len(values_row) - len(target))
+            target[column_index:column_index + len(values_row)] = list(values_row)
 
     def freeze(self, *, rows: int):
         self.frozen_rows = rows
@@ -40,12 +62,11 @@ class FakeWorksheet:
         self.rows.append(list(row))
 
     def update_acell(self, address: str, value: object):
-        letters = "".join(character for character in address if character.isalpha())
-        digits = "".join(character for character in address if character.isdigit())
-        column = 0
-        for character in letters:
-            column = column * 26 + ord(character.upper()) - 64
-        self.rows[int(digits) - 1][column - 1] = value
+        row_index, column_index = _cell_position(address)
+        while len(self.rows) <= row_index:
+            self.rows.append([])
+        self.rows[row_index] += [""] * max(0, column_index + 1 - len(self.rows[row_index]))
+        self.rows[row_index][column_index] = value
 
 
 class FakeSpreadsheet:
@@ -73,32 +94,50 @@ class AccountStoreTest(unittest.TestCase):
         )
         self.assertEqual(parsed["client_email"], "bot@example.com")
 
-    def test_ensure_schema_creates_tabs_and_headers(self):
+    def test_ensure_schema_creates_system_and_default_account_tabs(self):
         spreadsheet = FakeSpreadsheet()
         store = GoogleSheetAccountStore(spreadsheet)
         store.ensure_schema()
-        self.assertEqual(set(spreadsheet._worksheets), set(SHEET_SCHEMAS))
-        for title, columns in SHEET_SCHEMAS.items():
-            self.assertEqual(spreadsheet.worksheet(title).rows[0], list(columns))
-            self.assertEqual(spreadsheet.worksheet(title).frozen_rows, 1)
+        expected = set(SYSTEM_SHEET_SCHEMAS) | {DEFAULT_ACCOUNT_TAB}
+        self.assertEqual(set(spreadsheet._worksheets), expected)
+        self.assertEqual(spreadsheet.worksheet(DEFAULT_ACCOUNT_TAB).rows[0], list(TRADE_COLUMNS))
+        self.assertEqual(store.list_account_tabs(), (DEFAULT_ACCOUNT_TAB,))
+        self.assertEqual(account_display_name(DEFAULT_ACCOUNT_TAB), "기본계좌")
 
-    def test_existing_wrong_header_is_not_overwritten(self):
-        spreadsheet = FakeSpreadsheet([FakeWorksheet("거래내역", [["다른 헤더"]])])
+    def test_legacy_ledger_is_copied_once_to_default_account(self):
+        legacy_row = ["id1", "2026-11-01T12:30:01+09:00"] + [""] * 12 + ["정상"]
+        spreadsheet = FakeSpreadsheet([
+            FakeWorksheet("거래내역", [list(LEGACY_TRADE_COLUMNS), legacy_row]),
+        ])
+        store = GoogleSheetAccountStore(spreadsheet)
+        store.ensure_schema()
+        loaded = store.load_transactions(DEFAULT_ACCOUNT_TAB)
+        self.assertEqual(len(loaded), 1)
+        self.assertEqual(loaded[0]["거래ID"], "id1")
+        self.assertEqual(loaded[0]["입력시각"], "2026-11-01 12:30:01")
+        store.ensure_schema()
+        self.assertEqual(len(store.load_transactions(DEFAULT_ACCOUNT_TAB)), 1)
+
+    def test_existing_wrong_account_header_is_not_overwritten(self):
+        spreadsheet = FakeSpreadsheet([FakeWorksheet("계좌_연금", [["다른 헤더"]])])
         with self.assertRaises(SheetSchemaError):
             GoogleSheetAccountStore(spreadsheet).ensure_schema()
 
-    def test_append_load_and_cancel_transaction(self):
+    def test_create_append_update_and_cancel_transaction(self):
         spreadsheet = FakeSpreadsheet()
         store = GoogleSheetAccountStore(spreadsheet)
+        account_tab = store.create_account_tab("연금저축")
+        self.assertEqual(account_tab, "계좌_연금저축")
         record = {column: "" for column in TRADE_COLUMNS}
         record.update({"거래ID": "abc123", "유형": "입금", "금액": 1_000_000, "상태": "정상"})
-        store.append_transaction(record)
-        loaded = store.load_transactions()
-        self.assertEqual(len(loaded), 1)
-        self.assertEqual(loaded[0]["거래ID"], "abc123")
-        self.assertEqual(loaded[0]["금액"], 1_000_000)
-        self.assertTrue(store.cancel_transaction("abc123"))
-        self.assertEqual(store.load_transactions()[0]["상태"], "취소")
+        store.append_transaction(account_tab, record)
+        self.assertEqual(store.load_transactions(account_tab)[0]["금액"], 1_000_000)
+        self.assertTrue(store.update_transaction(account_tab, "abc123", {"금액": 2_000_000}))
+        updated = store.load_transactions(account_tab)[0]
+        self.assertEqual(updated["금액"], 2_000_000)
+        self.assertTrue(updated["수정시각"])
+        self.assertTrue(store.cancel_transaction(account_tab, "abc123"))
+        self.assertEqual(store.load_transactions(account_tab)[0]["상태"], "취소")
 
 
 if __name__ == "__main__":
