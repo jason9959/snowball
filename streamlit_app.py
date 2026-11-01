@@ -7,6 +7,7 @@ import hashlib
 import secrets
 import time
 from dataclasses import replace
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -87,6 +88,12 @@ def _css() -> None:
         .metric-card {background:#f7f8fc; border:1px solid #e8eaf2; padding:.8rem .9rem; border-radius:12px; min-width:0;}
         .metric-label {color:#555d6e; font-size:.82rem; line-height:1.25; margin-bottom:.32rem;}
         .metric-value {color:#222735; font-size:1.35rem; line-height:1.2; font-weight:650; white-space:nowrap;}
+        .home-hero {padding:1.5rem 1.2rem; border-radius:22px; color:white; margin:.4rem 0 1.2rem;
+          background:linear-gradient(135deg,#3157d5,#6b4ce6); box-shadow:0 12px 34px rgba(49,87,213,.18);}
+        .home-kicker {font-size:.78rem; letter-spacing:.08em; opacity:.78; margin-bottom:.35rem;}
+        .home-title {font-size:2rem; line-height:1.2; font-weight:800; margin:0 0 .45rem;}
+        .home-copy {font-size:.98rem; line-height:1.55; opacity:.9; margin:0;}
+        .feature-copy {min-height:3.2rem; color:#626b7c; font-size:.9rem; line-height:1.5;}
         @media (max-width: 640px) {
           .block-container {padding: .75rem .75rem 4.5rem;}
           h1 {font-size:1.75rem !important; line-height:1.2 !important;}
@@ -98,11 +105,116 @@ def _css() -> None:
           .metric-label {font-size:.74rem;}
           .metric-value {font-size:1.08rem;}
           div[data-testid="stDataFrame"] {font-size:.78rem;}
+          .home-hero {padding:1.25rem 1rem; border-radius:18px;}
+          .home-title {font-size:1.6rem;}
+          .feature-copy {min-height:auto;}
         }
         </style>
         """,
         unsafe_allow_html=True,
     )
+
+
+def _go_to(page: str) -> None:
+    st.session_state.app_page = page
+    if page == "home":
+        st.query_params.clear()
+    st.rerun()
+
+
+def _home_page() -> None:
+    st.markdown(
+        """
+        <div class="home-hero">
+          <div class="home-kicker">SNOWBALL PORTFOLIO LAB</div>
+          <div class="home-title">투자 전략과 실제 운용을 한곳에서</div>
+          <p class="home-copy">전략을 검증하거나 실제 체결 내역을 기록할 기능을 선택하세요.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    left, right = st.columns(2, gap="large")
+    with left:
+        with st.container(border=True):
+            st.subheader("📊 백테스팅")
+            st.markdown(
+                '<div class="feature-copy">프리셋과 사용자 조건을 이용해 수익률, 변동성, '
+                "MDD와 리밸런싱 내역을 검증합니다.</div>",
+                unsafe_allow_html=True,
+            )
+            if st.button("백테스팅 시작", type="primary", use_container_width=True):
+                _go_to("backtest")
+    with right:
+        with st.container(border=True):
+            st.subheader("🧾 매수·매도 입력")
+            st.markdown(
+                '<div class="feature-copy">실제 체결 수량과 단가를 기록하고 다음 월간 메일의 '
+                "실계좌 성과 계산에 활용합니다.</div>",
+                unsafe_allow_html=True,
+            )
+            if st.button("거래내역 입력", use_container_width=True):
+                _go_to("trades")
+    st.caption("실제 계좌 화면은 Google 계정 인증과 비공개 Google Sheet 연결을 순서대로 추가합니다.")
+
+
+def _trade_entry_page() -> None:
+    if st.button("← 기능 선택으로", key="trade_home"):
+        _go_to("home")
+    st.title("🧾 매수·매도 입력")
+    st.write("실제 체결 내역을 기록합니다. 현재 입력분은 이 브라우저 세션에 임시 보관됩니다.")
+    st.info("Google Sheet 연결 전 미리보기 화면입니다. 다음 단계에서 비공개 시트 영구 저장을 연결합니다.")
+
+    transaction_type = st.radio(
+        "거래 유형", ("매수", "매도", "입금", "출금", "배당"),
+        index=0, horizontal=True,
+    )
+    with st.form("trade_entry_form", clear_on_submit=True):
+        trade_date = st.date_input(
+            "거래일", value=dt.datetime.now(ZoneInfo("Asia/Seoul")).date(),
+        )
+        if transaction_type in {"매수", "매도"}:
+            first, second = st.columns(2)
+            ticker = first.text_input("종목코드", placeholder="예: 329750")
+            quantity = float(second.number_input("수량", min_value=0.0, step=1.0))
+            third, fourth = st.columns(2)
+            price = float(third.number_input("체결 단가(원)", min_value=0.0, step=10.0))
+            fee = float(fourth.number_input("수수료·세금(원)", min_value=0.0, step=10.0))
+            amount = quantity * price
+        else:
+            ticker = "현금" if transaction_type in {"입금", "출금"} else "배당"
+            quantity = 0.0
+            price = 0.0
+            fee = 0.0
+            amount = float(st.number_input("금액(원)", min_value=0.0, step=10_000.0))
+        memo = st.text_input("메모", placeholder="예: 11월 리밸런싱")
+        submitted = st.form_submit_button("임시 내역에 추가", type="primary", use_container_width=True)
+
+    if submitted:
+        if not transaction_type:
+            st.error("거래 유형을 선택하세요.")
+        elif transaction_type in {"매수", "매도"} and (not ticker.strip() or quantity <= 0 or price <= 0):
+            st.error("종목코드, 수량, 체결 단가를 입력하세요.")
+        elif transaction_type not in {"매수", "매도"} and amount <= 0:
+            st.error("금액을 입력하세요.")
+        else:
+            st.session_state.setdefault("trade_drafts", []).append({
+                "거래일": trade_date.isoformat(), "유형": transaction_type,
+                "종목코드": ticker.strip().upper(), "수량": quantity,
+                "체결단가": price, "거래금액": amount, "수수료·세금": fee, "메모": memo.strip(),
+            })
+            st.success("임시 내역에 추가했습니다.")
+
+    drafts = st.session_state.get("trade_drafts", [])
+    if drafts:
+        st.subheader("이번 세션 입력 내역")
+        st.dataframe(pd.DataFrame(drafts), use_container_width=True, hide_index=True)
+        first, second = st.columns(2)
+        if first.button("마지막 내역 삭제", use_container_width=True):
+            drafts.pop()
+            st.rerun()
+        if second.button("임시 내역 전체 삭제", use_container_width=True):
+            st.session_state.trade_drafts = []
+            st.rerun()
 
 
 def _momentum_editor(label: str, spec: MomentumSpec, key: str) -> MomentumSpec:
@@ -818,6 +930,17 @@ def _execute(saved: SavedRun) -> tuple[dict, PriceBundle]:
 
 def main() -> None:
     _css()
+    if st.query_params.get("run_id"):
+        st.session_state.app_page = "backtest"
+    page = st.session_state.get("app_page", "home")
+    if page == "home":
+        _home_page()
+        return
+    if page == "trades":
+        _trade_entry_page()
+        return
+    if st.button("← 기능 선택으로", key="backtest_home"):
+        _go_to("home")
     st.title("❄️ Snowball Portfolio Lab")
     st.write("연구 프리셋을 불러오거나 조건을 조정해 동적 포트폴리오를 검증합니다.")
     restore_id = st.query_params.get("run_id")
