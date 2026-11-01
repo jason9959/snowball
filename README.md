@@ -66,6 +66,25 @@ python -m snowball.cli mail-rebalance --config config/mailing.json --date 2026-1
 GitHub Actions 화면의 `Run workflow`에서도 `dry_run` 테스트 후
 실제 메일을 발송할 수 있습니다.
 
+## 실제 거래 Google Sheet 연결
+
+Streamlit의 `매수·매도 입력` 화면은 비공개 Google Sheet를 실제 거래
+원장으로 사용합니다. 연결되면 `거래내역`, `리밸런싱기록`, `월간성과`,
+`설정` 탭과 각 헤더를 자동 생성하며, 기존 헤더가 다르면 데이터를
+덮어쓰지 않고 중단합니다.
+
+1. Google Cloud에서 Google Sheets API를 사용 설정합니다.
+2. 서비스 계정을 만들고 JSON 키를 발급합니다.
+3. 대상 Google Sheet를 서비스 계정의 `client_email`에 편집자로 공유합니다.
+4. Streamlit Cloud의 `Settings > Secrets`에 다음 두 값을 입력합니다.
+
+```toml
+GOOGLE_SHEET_ID = "Google Sheet URL의 /d/와 /edit 사이 값"
+GOOGLE_SERVICE_ACCOUNT_JSON = '''JSON 키 파일 전체 내용'''
+```
+
+인증 JSON 파일과 실제 `secrets.toml`은 저장소에 커밋하지 않습니다.
+
 ## 설계 원칙
 
 1. 전략 설정은 `snowball/presets.py` 한 곳에서 관리합니다.

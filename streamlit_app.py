@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+from snowball.account_store import GoogleSheetAccountStore, SheetSchemaError
 from snowball.core.catalog import US_ETFS, display_name
 from snowball.core.engine import resolve_recent_period
 from snowball.app_state import SavedRun
@@ -122,6 +123,35 @@ def _go_to(page: str) -> None:
     st.rerun()
 
 
+@st.cache_resource(show_spinner=False)
+def _cached_google_sheet_store(
+    spreadsheet_id: str,
+    service_account_json: str,
+) -> GoogleSheetAccountStore:
+    store = GoogleSheetAccountStore.connect(spreadsheet_id, service_account_json)
+    store.ensure_schema()
+    return store
+
+
+def _google_sheet_store() -> tuple[GoogleSheetAccountStore | None, str | None]:
+    try:
+        spreadsheet_id = str(st.secrets.get("GOOGLE_SHEET_ID", "")).strip()
+        service_account_json = st.secrets.get("GOOGLE_SERVICE_ACCOUNT_JSON", "")
+    except Exception:
+        return None, None
+    if not spreadsheet_id or not service_account_json:
+        return None, None
+    if not isinstance(service_account_json, str):
+        import json
+        service_account_json = json.dumps(dict(service_account_json))
+    try:
+        return _cached_google_sheet_store(spreadsheet_id, service_account_json), None
+    except (ValueError, RuntimeError, SheetSchemaError) as error:
+        return None, str(error)
+    except Exception as error:
+        return None, f"Google Sheet에 연결하지 못했습니다: {error}"
+
+
 def _home_page() -> None:
     st.markdown(
         """
@@ -162,9 +192,24 @@ def _trade_entry_page() -> None:
         _go_to("home")
     st.title("🧾 매수·매도 입력")
     st.write("실제 체결과 현금흐름을 기록하고 월간 운용 결과를 확인합니다.")
-    st.info("Google Sheet 연결 전 화면 검증 단계입니다. 현재 내역은 이 브라우저 세션에만 임시 저장됩니다.")
+    sheet_store, sheet_error = _google_sheet_store()
     st.session_state.setdefault("trade_drafts", [])
-    drafts: list[dict[str, object]] = st.session_state.trade_drafts
+    if sheet_store is not None:
+        try:
+            drafts: list[dict[str, object]] = sheet_store.load_transactions()
+            st.success(f"Google Sheet 연결됨: {sheet_store.title}")
+            st.caption("이 화면에서 추가하거나 취소한 내역은 Google Sheet의 ‘거래내역’ 탭에 바로 반영됩니다.")
+        except Exception as error:
+            sheet_store = None
+            drafts = st.session_state.trade_drafts
+            sheet_error = f"거래내역을 읽지 못했습니다: {error}"
+    else:
+        drafts = st.session_state.trade_drafts
+    if sheet_error:
+        st.error(sheet_error)
+        st.warning("연결 오류가 해결될 때까지 입력 내용은 이 브라우저 세션에만 임시 저장됩니다.")
+    elif sheet_store is None:
+        st.info("Google Sheet 연결 전입니다. 현재 내역은 이 브라우저 세션에만 임시 저장됩니다.")
     input_tab, ledger_tab, account_tab, rebalance_tab = st.tabs(
         ("✍️ 거래 입력", "📋 거래내역", "💼 계좌 현황", "🔔 리밸런싱 기록"),
     )
@@ -245,7 +290,7 @@ def _trade_entry_page() -> None:
                     inferred_name = DOMESTIC_NAMES.get(lookup_symbol, "")
                 else:
                     inferred_name = US_ETFS.get(lookup_code, "")
-                drafts.append({
+                record = {
                     "거래ID": secrets.token_hex(6),
                     "입력시각": dt.datetime.now(ZoneInfo("Asia/Seoul")).isoformat(timespec="seconds"),
                     "거래일": trade_date.isoformat(), "유형": transaction_type, "시장": market,
@@ -253,8 +298,17 @@ def _trade_entry_page() -> None:
                     "수량": quantity, "체결단가": price, "수수료·세금": fee,
                     "금액": amount, "통화": currency, "환율": fx_rate,
                     "메모": memo.strip(), "상태": "정상",
-                })
-                st.success("내역을 추가했습니다. Google Sheet 연결 후 같은 형식으로 영구 저장됩니다.")
+                }
+                if sheet_store is not None:
+                    try:
+                        sheet_store.append_transaction(record)
+                        st.success("Google Sheet에 내역을 저장했습니다.")
+                        st.rerun()
+                    except Exception as error:
+                        st.error(f"저장하지 못했습니다: {error}")
+                else:
+                    drafts.append(record)
+                    st.success("임시 내역을 추가했습니다. Google Sheet 연결 후에는 영구 저장됩니다.")
 
     ledger = pd.DataFrame(drafts)
     with ledger_tab:
@@ -284,12 +338,22 @@ def _trade_entry_page() -> None:
                     "취소할 내역", tuple(label_by_id), format_func=label_by_id.get,
                 )
                 if st.button("선택 내역 취소", use_container_width=True):
-                    for record in drafts:
-                        if record["거래ID"] == cancel_id:
-                            record["상태"] = "취소"
-                            break
-                    st.success("선택한 내역을 취소 처리했습니다. 원본 행은 감사 기록으로 유지됩니다.")
-                    st.rerun()
+                    if sheet_store is not None:
+                        try:
+                            if not sheet_store.cancel_transaction(str(cancel_id)):
+                                st.error("취소할 거래를 Google Sheet에서 찾지 못했습니다.")
+                            else:
+                                st.success("Google Sheet에서 선택한 내역을 취소 처리했습니다.")
+                                st.rerun()
+                        except Exception as error:
+                            st.error(f"취소 처리하지 못했습니다: {error}")
+                    else:
+                        for record in drafts:
+                            if record["거래ID"] == cancel_id:
+                                record["상태"] = "취소"
+                                break
+                        st.success("선택한 내역을 취소 처리했습니다. 원본 행은 유지됩니다.")
+                        st.rerun()
 
     with account_tab:
         active = ledger[ledger["상태"] == "정상"].copy() if not ledger.empty else ledger

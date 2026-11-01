@@ -7,3 +7,5 @@ dist/
 build/
 *.egg-info/
 results/
+.streamlit/secrets.toml
+*service-account*.json
