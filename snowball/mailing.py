@@ -27,6 +27,7 @@ class MailingPortfolio:
     preset: PortfolioPreset
     secondary_preset: PortfolioPreset | None = None
     first_weight: float = 1.0
+    tracking_start: dt.date | None = None
 
     def validate(self) -> None:
         if not self.title.strip():
@@ -39,6 +40,20 @@ class MailingPortfolio:
 
 
 @dataclass(frozen=True)
+class PerformanceSnapshot:
+    tracking_start: dt.date
+    as_of: dt.date
+    observations: int
+    cumulative_return: float | None = None
+    monthly_return: float | None = None
+    current_drawdown: float | None = None
+    max_drawdown: float | None = None
+    max_drawdown_date: dt.date | None = None
+    drawdown_peak_date: dt.date | None = None
+    drawdown_days: int = 0
+
+
+@dataclass(frozen=True)
 class RebalanceRecommendation:
     title: str
     trade_date: dt.date
@@ -47,6 +62,7 @@ class RebalanceRecommendation:
     selection: str
     domestic_selection: str
     details: tuple[tuple[str, str], ...] = ()
+    performance: PerformanceSnapshot | None = None
 
 
 def load_mailing_portfolios(path: str | Path) -> list[MailingPortfolio]:
@@ -76,6 +92,10 @@ def load_mailing_portfolios(path: str | Path) -> list[MailingPortfolio]:
             preset=primary,
             secondary_preset=secondary,
             first_weight=float(raw.get("first_weight", 1.0)),
+            tracking_start=(
+                dt.date.fromisoformat(str(raw["tracking_start"]))
+                if raw.get("tracking_start") else None
+            ),
         )
         record.validate()
         result.append(record)
@@ -170,6 +190,53 @@ def _with_synthetic_trade_session(bundle: PriceBundle, trade_date: dt.date) -> t
     return PriceBundle(close, adjusted_open, source=f"{bundle.source} + signal-only session"), decision_ts.date()
 
 
+def _performance_snapshot(
+    result: dict, tracking_start: dt.date, decision_date: dt.date,
+) -> PerformanceSnapshot:
+    nav = result["nav"].dropna().astype(float)
+    nav = nav[
+        (nav.index >= pd.Timestamp(tracking_start))
+        & (nav.index <= pd.Timestamp(decision_date))
+    ]
+    if nav.empty:
+        return PerformanceSnapshot(tracking_start, decision_date, 0)
+
+    cumulative_return = float(nav.iloc[-1] - 1.0)
+    month_start = pd.Timestamp(decision_date).replace(day=1)
+    before_month = nav[nav.index < month_start]
+    month_nav = nav[nav.index >= month_start]
+    if month_nav.empty:
+        monthly_return = None
+    elif before_month.empty:
+        monthly_return = float(month_nav.iloc[-1] - 1.0)
+    else:
+        monthly_return = float(month_nav.iloc[-1] / before_month.iloc[-1] - 1.0)
+
+    running_peak = nav.cummax().clip(lower=1.0)
+    drawdown = nav / running_peak - 1.0
+    current_drawdown = float(drawdown.iloc[-1])
+    max_drawdown = float(drawdown.min())
+    max_drawdown_date = pd.Timestamp(drawdown.idxmin()).date()
+    peak_value = max(1.0, float(nav.max()))
+    if peak_value <= 1.0:
+        peak_date = tracking_start
+    else:
+        peak_date = pd.Timestamp(nav[nav == peak_value].index[-1]).date()
+    drawdown_days = max(0, (decision_date - peak_date).days) if current_drawdown < -1e-10 else 0
+    return PerformanceSnapshot(
+        tracking_start=tracking_start,
+        as_of=decision_date,
+        observations=len(nav),
+        cumulative_return=cumulative_return,
+        monthly_return=monthly_return,
+        current_drawdown=current_drawdown,
+        max_drawdown=max_drawdown,
+        max_drawdown_date=max_drawdown_date,
+        drawdown_peak_date=peak_date,
+        drawdown_days=drawdown_days,
+    )
+
+
 def generate_recommendations(
     portfolios: Iterable[MailingPortfolio],
     trade_date: dt.date,
@@ -185,7 +252,9 @@ def generate_recommendations(
         record.validate()
 
     evaluation_start = (pd.Timestamp(trade_date) - pd.DateOffset(months=24)).replace(day=1)
-    download_start = evaluation_start - pd.DateOffset(months=18)
+    tracking_starts = [pd.Timestamp(record.tracking_start) for record in records if record.tracking_start]
+    calculation_start = min([evaluation_start, *tracking_starts])
+    download_start = calculation_start - pd.DateOffset(months=18)
     symbols: list[str] = ["QQQ"]
     signals: list[str] = []
     for record in records:
@@ -206,14 +275,19 @@ def generate_recommendations(
 
     output: list[RebalanceRecommendation] = []
     for record in records:
+        run_start = (
+            record.tracking_start
+            if record.tracking_start and record.tracking_start < trade_date
+            else evaluation_start.date()
+        )
         if record.secondary_preset is None:
             result = run_preset(
-                record.preset, bundle, market, evaluation_start.date(), trade_date,
+                record.preset, bundle, market, run_start, trade_date,
             )
         else:
             result = run_blended_presets(
                 record.preset, record.secondary_preset, record.first_weight,
-                bundle, market, evaluation_start.date(), trade_date,
+                bundle, market, run_start, trade_date,
                 preset_name=record.title,
                 first_label=record.preset.name,
                 second_label=record.secondary_preset.name,
@@ -237,6 +311,10 @@ def generate_recommendations(
             selection=str(row["선택된 종목"]),
             domestic_selection=_domestic_equivalent(str(row["선택된 종목"])),
             details=tuple(details),
+            performance=(
+                _performance_snapshot(result, record.tracking_start, decision_date)
+                if record.tracking_start else None
+            ),
         ))
     return output
 
@@ -262,30 +340,102 @@ def render_email(recommendations: Iterable[RebalanceRecommendation]) -> tuple[st
             f"- 국내 ETF 대체 제안(검증 중): {record.domestic_selection}",
         ])
         text_lines.extend(f"- {label}: {selection}" for label, selection in record.details)
+        performance_html = ""
+        if record.performance is not None:
+            performance = record.performance
+            if performance.observations == 0:
+                text_lines.append(
+                    f"- 성과 추적: {performance.tracking_start:%Y-%m-%d} 시가 매수부터 시작"
+                )
+                performance_html = (
+                    '<div style="margin-top:16px;padding:14px;border-radius:12px;'
+                    'background:#f3f6ff;color:#30469b">'
+                    f"성과 추적은 <b>{performance.tracking_start:%Y-%m-%d} 시가 매수</b>부터 시작됩니다."
+                    "</div>"
+                )
+            else:
+                drawdown_status = (
+                    "낙폭 없음 · 신고가"
+                    if (performance.current_drawdown or 0.0) >= -1e-10
+                    else (
+                        f"진행 중 {performance.current_drawdown:.2%} · "
+                        f"고점 이후 {performance.drawdown_days}일"
+                    )
+                )
+                text_lines.extend([
+                    f"- 모델 운용 시작: {performance.tracking_start:%Y-%m-%d}",
+                    f"- 누적 수익률: {performance.cumulative_return:.2%}",
+                    f"- 이번 달 수익률: {performance.monthly_return:.2%}",
+                    f"- 현재 낙폭: {drawdown_status}",
+                    f"- 운용 중 MDD: {performance.max_drawdown:.2%} "
+                    f"({performance.max_drawdown_date:%Y-%m-%d})",
+                ])
+                positive = (performance.cumulative_return or 0.0) >= 0
+                cumulative_color = "#137a49" if positive else "#c23b45"
+                performance_html = (
+                    '<div style="margin-top:18px">'
+                    '<div style="font-size:13px;color:#697386;margin-bottom:8px">'
+                    f"모델 포트폴리오 성과 · {performance.as_of:%Y-%m-%d} 종가 기준</div>"
+                    '<table role="presentation" width="100%" cellspacing="8" '
+                    'style="border-collapse:separate;margin:-8px;width:calc(100% + 16px)"><tr>'
+                    '<td width="50%" style="padding:13px;background:#f6f8fc;border-radius:12px">'
+                    '<div style="font-size:12px;color:#697386">누적 수익률</div>'
+                    f'<div style="font-size:21px;font-weight:700;color:{cumulative_color}">'
+                    f"{performance.cumulative_return:.2%}</div></td>"
+                    '<td width="50%" style="padding:13px;background:#f6f8fc;border-radius:12px">'
+                    '<div style="font-size:12px;color:#697386">이번 달 수익률</div>'
+                    f'<div style="font-size:21px;font-weight:700">{performance.monthly_return:.2%}</div>'
+                    "</td></tr><tr>"
+                    '<td style="padding:13px;background:#f6f8fc;border-radius:12px">'
+                    '<div style="font-size:12px;color:#697386">현재 낙폭</div>'
+                    f'<div style="font-size:15px;font-weight:700">{html.escape(drawdown_status)}</div></td>'
+                    '<td style="padding:13px;background:#f6f8fc;border-radius:12px">'
+                    '<div style="font-size:12px;color:#697386">운용 중 MDD</div>'
+                    f'<div style="font-size:21px;font-weight:700;color:#c23b45">'
+                    f"{performance.max_drawdown:.2%}</div>"
+                    f'<div style="font-size:11px;color:#697386">{performance.max_drawdown_date:%Y-%m-%d}</div>'
+                    "</td></tr></table></div>"
+                )
         text_lines.append("")
         detail_html = "".join(
             f"<li><b>{html.escape(label)}</b>: {html.escape(selection)}</li>"
             for label, selection in record.details
         )
         cards.append(
-            '<div style="border:1px solid #e2e5ec;border-radius:12px;padding:16px;margin:12px 0">'
-            f"<h3 style=\"margin:0 0 10px\">{html.escape(record.title)}</h3>"
-            f"<p style=\"margin:4px 0\"><b>판단 기준일</b>: {record.decision_date:%Y-%m-%d}</p>"
-            f"<p style=\"margin:4px 0\"><b>미국 ETF 매수 예정일</b>: {record.trade_date:%Y-%m-%d}</p>"
-            f"<p style=\"margin:4px 0\"><b>국내 ETF 매수 제안일</b>: {record.domestic_trade_date:%Y-%m-%d}</p>"
-            f"<p style=\"margin:4px 0\"><b>미국 ETF 목표 비중</b>: {html.escape(record.selection)}</p>"
-            f"<p style=\"margin:4px 0\"><b>국내 ETF 대체 제안(검증 중)</b>: "
-            f"{html.escape(record.domestic_selection)}</p>"
-            + (f"<ul>{detail_html}</ul>" if detail_html else "") + "</div>"
+            '<div style="background:#ffffff;border:1px solid #e6e9f0;border-radius:18px;'
+            'padding:20px;margin:14px 0;box-shadow:0 4px 18px rgba(30,47,86,.06)">'
+            f'<div style="font-size:20px;font-weight:800;margin-bottom:14px">{html.escape(record.title)}</div>'
+            '<div style="font-size:13px;color:#697386;line-height:1.7">'
+            f"판단 기준일 <b style=\"color:#252a34\">{record.decision_date:%Y-%m-%d}</b> · "
+            f"국내 매수일 <b style=\"color:#252a34\">{record.domestic_trade_date:%Y-%m-%d}</b></div>"
+            '<div style="margin-top:16px;padding:15px;background:#f6f8fc;border-radius:12px">'
+            '<div style="font-size:12px;color:#697386;margin-bottom:5px">미국 ETF 목표 비중</div>'
+            f'<div style="font-size:16px;font-weight:700;line-height:1.6">{html.escape(record.selection)}</div>'
+            "</div>"
+            '<div style="margin-top:10px;padding:15px;background:#fff7e8;border-radius:12px">'
+            '<div style="font-size:12px;color:#8a6216;margin-bottom:5px">국내 ETF 실행 제안 · 검증 중</div>'
+            f'<div style="font-size:15px;font-weight:700;line-height:1.6">{html.escape(record.domestic_selection)}</div>'
+            "</div>"
+            + (f'<ul style="padding-left:20px;line-height:1.7;color:#4b5565">{detail_html}</ul>' if detail_html else "")
+            + performance_html + "</div>"
         )
     text_lines.append("본 메일은 자동 계산 알림이며 매수·매도 권유가 아닙니다.")
     body_html = (
-        '<div style="font-family:Arial,sans-serif;max-width:680px;color:#222">'
-        f"<h2>Snowball 월간 리밸런싱</h2>"
-        f"<p><b>{trade_date:%Y-%m-%d}</b> 미국장 시가 리밸런싱 목표입니다.<br>"
-        "직전 거래일의 확정 종가로 판단했으며 당일 체결가는 예측하지 않습니다.</p>"
+        '<div style="margin:0;padding:24px 12px;background:#f3f5f9;'
+        'font-family:Arial,Apple SD Gothic Neo,sans-serif;color:#252a34">'
+        '<div style="max-width:680px;margin:0 auto">'
+        '<div style="padding:24px;border-radius:20px;background:linear-gradient(135deg,#3157d5,#6b4ce6);'
+        'color:#fff;margin-bottom:14px">'
+        '<div style="font-size:13px;opacity:.82">SNOWBALL PORTFOLIO</div>'
+        '<div style="font-size:27px;font-weight:800;margin-top:6px">월간 리밸런싱 리포트</div>'
+        f'<div style="font-size:15px;margin-top:12px"><b>{trade_date:%Y-%m-%d}</b> 시가 목표</div>'
+        '<div style="font-size:12px;opacity:.82;margin-top:4px">직전 미국 거래일의 확정 종가 기준</div>'
+        "</div>"
         + "".join(cards)
-        + '<p style="font-size:12px;color:#666">자동 계산 알림이며 매수·매도 권유가 아닙니다.</p></div>'
+        + '<div style="font-size:11px;line-height:1.6;color:#7a8495;padding:10px 6px">'
+        "성과는 목표 비중대로 시가에 체결된 모델 포트폴리오 기준이며 실제 계좌의 세금, "
+        "수수료, 입출금 및 체결가와 다를 수 있습니다. 자동 계산 알림이며 매수·매도 권유가 아닙니다."
+        "</div></div></div>"
     )
     return subject, "\n".join(text_lines), body_html
 

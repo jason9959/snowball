@@ -45,9 +45,10 @@ GitHub Actions의 `Monthly rebalance email` 작업은 매 미국 거래일
 알 수 없는 시가 자체를 예측하지는 않습니다. 메일에는 미국 ETF 목표와
 현재의 국내 ETF 대체 제안이 함께 표시됩니다.
 
-기본 발송 포트폴리오는 `config/mailing.json`의 프리셋 10(1+9,
-50:50)입니다. 목록을 수정하면 여러 프리셋을 한 메일에 포함할
-수 있습니다.
+기본 발송 포트폴리오는 `config/mailing.json`의 프리셋 3(1+2,
+50:50)입니다. 2026-11-02 시가를 모델 운용 시작점으로 하여 다음
+메일부터 누적 수익률, 월간 수익률, 현재 낙폭과 운용 중 MDD를 함께
+표시합니다. 목록을 수정하면 여러 프리셋을 한 메일에 포함할 수 있습니다.
 
 GitHub 저장소의 `Settings > Secrets and variables > Actions`에 다음
 Repository secrets를 추가합니다.

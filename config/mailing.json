@@ -1,10 +1,11 @@
 {
   "portfolios": [
     {
-      "title": "10. 프리셋 1 + 9 결합 (50:50)",
+      "title": "3. 프리셋 결합 (1 + 2, 50:50)",
       "preset": "1. 분산투자 방어형",
-      "secondary_preset": "9. MDD 개선 공격형",
-      "first_weight": 0.5
+      "secondary_preset": "2. 집중투자 공격형",
+      "first_weight": 0.5,
+      "tracking_start": "2026-11-02"
     }
   ]
 }
