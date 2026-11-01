@@ -22,7 +22,7 @@ from snowball.data.market_data import (
     load_strategy_market_data,
 )
 from snowball.data.prices import PriceBundle, download_yahoo_prices
-from snowball.domestic import DOMESTIC_EXECUTION_MAP, domestic_label, domestic_symbols
+from snowball.domestic import DOMESTIC_EXECUTION_MAP, DOMESTIC_NAMES, domestic_label, domestic_symbols
 from snowball.exports import diagnostic_frames, diagnostic_zip, market_data_export
 from snowball.presets import MomentumSpec, PRESETS, PortfolioPreset, SpreadRule
 from snowball.service import (
@@ -161,60 +161,181 @@ def _trade_entry_page() -> None:
     if st.button("← 기능 선택으로", key="trade_home"):
         _go_to("home")
     st.title("🧾 매수·매도 입력")
-    st.write("실제 체결 내역을 기록합니다. 현재 입력분은 이 브라우저 세션에 임시 보관됩니다.")
-    st.info("Google Sheet 연결 전 미리보기 화면입니다. 다음 단계에서 비공개 시트 영구 저장을 연결합니다.")
-
-    transaction_type = st.radio(
-        "거래 유형", ("매수", "매도", "입금", "출금", "배당"),
-        index=0, horizontal=True,
+    st.write("실제 체결과 현금흐름을 기록하고 월간 운용 결과를 확인합니다.")
+    st.info("Google Sheet 연결 전 화면 검증 단계입니다. 현재 내역은 이 브라우저 세션에만 임시 저장됩니다.")
+    st.session_state.setdefault("trade_drafts", [])
+    drafts: list[dict[str, object]] = st.session_state.trade_drafts
+    input_tab, ledger_tab, account_tab, rebalance_tab = st.tabs(
+        ("✍️ 거래 입력", "📋 거래내역", "💼 계좌 현황", "🔔 리밸런싱 기록"),
     )
-    with st.form("trade_entry_form", clear_on_submit=True):
-        trade_date = st.date_input(
-            "거래일", value=dt.datetime.now(ZoneInfo("Asia/Seoul")).date(),
+
+    with input_tab:
+        transaction_type = st.radio(
+            "거래 유형", ("매수", "매도", "입금", "출금", "배당", "잔액조정"),
+            index=0, horizontal=True, key="transaction_type",
         )
-        if transaction_type in {"매수", "매도"}:
+        with st.form("trade_entry_form", clear_on_submit=True):
             first, second = st.columns(2)
-            ticker = first.text_input("종목코드", placeholder="예: 329750")
-            quantity = float(second.number_input("수량", min_value=0.0, step=1.0))
-            third, fourth = st.columns(2)
-            price = float(third.number_input("체결 단가(원)", min_value=0.0, step=10.0))
-            fee = float(fourth.number_input("수수료·세금(원)", min_value=0.0, step=10.0))
-            amount = quantity * price
-        else:
-            ticker = "현금" if transaction_type in {"입금", "출금"} else "배당"
+            trade_date = first.date_input(
+                "거래일", value=dt.datetime.now(ZoneInfo("Asia/Seoul")).date(),
+            )
+            market = second.selectbox("시장", ("한국", "미국"), disabled=transaction_type in {"입금", "출금", "잔액조정"})
+            currency = "KRW" if market == "한국" else "USD"
+            ticker = ""
+            asset_name = ""
             quantity = 0.0
             price = 0.0
             fee = 0.0
-            amount = float(st.number_input("금액(원)", min_value=0.0, step=10_000.0))
-        memo = st.text_input("메모", placeholder="예: 11월 리밸런싱")
-        submitted = st.form_submit_button("임시 내역에 추가", type="primary", use_container_width=True)
+            amount = 0.0
+            fx_rate = 1.0
 
-    if submitted:
-        if not transaction_type:
-            st.error("거래 유형을 선택하세요.")
-        elif transaction_type in {"매수", "매도"} and (not ticker.strip() or quantity <= 0 or price <= 0):
-            st.error("종목코드, 수량, 체결 단가를 입력하세요.")
-        elif transaction_type not in {"매수", "매도"} and amount <= 0:
-            st.error("금액을 입력하세요.")
+            if transaction_type in {"매수", "매도"}:
+                first, second = st.columns(2)
+                ticker = first.text_input("종목코드", placeholder="예: 329750 또는 QQQ")
+                asset_name = second.text_input("종목명(선택)", placeholder="코드가 등록돼 있으면 자동 입력")
+                third, fourth = st.columns(2)
+                quantity = float(third.number_input("수량", min_value=0.0, step=1.0, format="%.4f"))
+                price = float(fourth.number_input(f"체결 단가({currency})", min_value=0.0, step=10.0 if currency == "KRW" else 0.01))
+                fifth, sixth = st.columns(2)
+                fee = float(fifth.number_input(f"수수료·세금({currency})", min_value=0.0, step=10.0 if currency == "KRW" else 0.01))
+                if currency == "USD":
+                    fx_rate = float(sixth.number_input("적용 환율(원/달러)", min_value=0.0, value=1_400.0, step=1.0))
+                else:
+                    sixth.text_input("통화", value="KRW", disabled=True)
+                amount = quantity * price
+                st.caption(f"예상 거래금액: {amount * fx_rate:,.0f}원 · 수수료 제외")
+            elif transaction_type == "배당":
+                first, second = st.columns(2)
+                ticker = first.text_input("배당 종목코드", placeholder="예: 329750")
+                asset_name = second.text_input("종목명(선택)")
+                amount = float(st.number_input(f"실제 입금된 배당금({currency})", min_value=0.0, step=100.0 if currency == "KRW" else 0.01))
+                if currency == "USD":
+                    fx_rate = float(st.number_input("적용 환율(원/달러)", min_value=0.0, value=1_400.0, step=1.0))
+            else:
+                market = "현금"
+                currency = "KRW"
+                ticker = "현금"
+                if transaction_type == "잔액조정":
+                    amount = float(st.number_input(
+                        "현금 증감액(KRW)", value=0.0, step=10_000.0,
+                        help="현금을 늘리려면 양수, 줄이려면 음수로 입력합니다.",
+                    ))
+                else:
+                    amount = float(st.number_input("금액(KRW)", min_value=0.0, step=10_000.0))
+
+            memo = st.text_input("메모", placeholder="예: 11월 리밸런싱")
+            submitted = st.form_submit_button("내역 추가", type="primary", use_container_width=True)
+
+        normalized_ticker = ticker.strip().upper()
+        if submitted:
+            if transaction_type in {"매수", "매도"} and (
+                not normalized_ticker or quantity <= 0 or price <= 0 or fx_rate <= 0
+            ):
+                st.error("종목코드, 수량, 체결 단가와 환율을 확인하세요.")
+            elif transaction_type == "배당" and (not normalized_ticker or amount <= 0 or fx_rate <= 0):
+                st.error("배당 종목코드와 실제 입금액을 입력하세요.")
+            elif transaction_type == "잔액조정" and abs(amount) <= 1e-10:
+                st.error("0이 아닌 조정 금액을 입력하세요.")
+            elif transaction_type not in {"매수", "매도", "배당", "잔액조정"} and amount <= 0:
+                st.error("금액을 입력하세요.")
+            else:
+                lookup_code = normalized_ticker
+                if lookup_code.isdigit() and len(lookup_code) == 6:
+                    lookup_symbol = f"{lookup_code}.KS"
+                    inferred_name = DOMESTIC_NAMES.get(lookup_symbol, "")
+                else:
+                    inferred_name = US_ETFS.get(lookup_code, "")
+                drafts.append({
+                    "거래ID": secrets.token_hex(6),
+                    "입력시각": dt.datetime.now(ZoneInfo("Asia/Seoul")).isoformat(timespec="seconds"),
+                    "거래일": trade_date.isoformat(), "유형": transaction_type, "시장": market,
+                    "종목코드": normalized_ticker, "종목명": asset_name.strip() or inferred_name,
+                    "수량": quantity, "체결단가": price, "수수료·세금": fee,
+                    "금액": amount, "통화": currency, "환율": fx_rate,
+                    "메모": memo.strip(), "상태": "정상",
+                })
+                st.success("내역을 추가했습니다. Google Sheet 연결 후 같은 형식으로 영구 저장됩니다.")
+
+    ledger = pd.DataFrame(drafts)
+    with ledger_tab:
+        if ledger.empty:
+            st.info("입력된 거래내역이 없습니다.")
         else:
-            st.session_state.setdefault("trade_drafts", []).append({
-                "거래일": trade_date.isoformat(), "유형": transaction_type,
-                "종목코드": ticker.strip().upper(), "수량": quantity,
-                "체결단가": price, "거래금액": amount, "수수료·세금": fee, "메모": memo.strip(),
-            })
-            st.success("임시 내역에 추가했습니다.")
+            left, right = st.columns(2)
+            type_filter = left.multiselect("유형 필터", sorted(ledger["유형"].unique()))
+            include_cancelled = right.toggle("취소 내역 포함", value=True)
+            visible = ledger.copy()
+            if type_filter:
+                visible = visible[visible["유형"].isin(type_filter)]
+            if not include_cancelled:
+                visible = visible[visible["상태"] == "정상"]
+            st.dataframe(visible, use_container_width=True, hide_index=True)
+            st.download_button(
+                "CSV 백업 다운로드", visible.to_csv(index=False).encode("utf-8-sig"),
+                file_name="snowball_transactions.csv", mime="text/csv", use_container_width=True,
+            )
+            active = ledger[ledger["상태"] == "정상"]
+            if not active.empty:
+                label_by_id = {
+                    row["거래ID"]: f'{row["거래일"]} · {row["유형"]} · {row["종목코드"] or "현금"}'
+                    for _, row in active.iterrows()
+                }
+                cancel_id = st.selectbox(
+                    "취소할 내역", tuple(label_by_id), format_func=label_by_id.get,
+                )
+                if st.button("선택 내역 취소", use_container_width=True):
+                    for record in drafts:
+                        if record["거래ID"] == cancel_id:
+                            record["상태"] = "취소"
+                            break
+                    st.success("선택한 내역을 취소 처리했습니다. 원본 행은 감사 기록으로 유지됩니다.")
+                    st.rerun()
 
-    drafts = st.session_state.get("trade_drafts", [])
-    if drafts:
-        st.subheader("이번 세션 입력 내역")
-        st.dataframe(pd.DataFrame(drafts), use_container_width=True, hide_index=True)
-        first, second = st.columns(2)
-        if first.button("마지막 내역 삭제", use_container_width=True):
-            drafts.pop()
-            st.rerun()
-        if second.button("임시 내역 전체 삭제", use_container_width=True):
-            st.session_state.trade_drafts = []
-            st.rerun()
+    with account_tab:
+        active = ledger[ledger["상태"] == "정상"].copy() if not ledger.empty else ledger
+        if active.empty:
+            st.info("입금과 거래를 입력하면 예상 현금과 보유수량이 표시됩니다.")
+        else:
+            active["원화금액"] = active["금액"].astype(float) * active["환율"].astype(float)
+            active["원화비용"] = active["수수료·세금"].astype(float) * active["환율"].astype(float)
+            cash_change = pd.Series(0.0, index=active.index)
+            cash_change[active["유형"] == "입금"] = active.loc[active["유형"] == "입금", "원화금액"]
+            cash_change[active["유형"] == "출금"] = -active.loc[active["유형"] == "출금", "원화금액"]
+            cash_change[active["유형"] == "배당"] = active.loc[active["유형"] == "배당", "원화금액"]
+            cash_change[active["유형"] == "잔액조정"] = active.loc[active["유형"] == "잔액조정", "원화금액"]
+            cash_change[active["유형"] == "매수"] = -(
+                active.loc[active["유형"] == "매수", "원화금액"]
+                + active.loc[active["유형"] == "매수", "원화비용"]
+            )
+            cash_change[active["유형"] == "매도"] = (
+                active.loc[active["유형"] == "매도", "원화금액"]
+                - active.loc[active["유형"] == "매도", "원화비용"]
+            )
+            deposits = active.loc[active["유형"] == "입금", "원화금액"].sum()
+            withdrawals = active.loc[active["유형"] == "출금", "원화금액"].sum()
+            first, second, third = st.columns(3)
+            first.metric("순입금", f"{deposits - withdrawals:,.0f}원")
+            second.metric("예상 현금", f"{cash_change.sum():,.0f}원")
+            third.metric("누적 비용", f"{active['원화비용'].sum():,.0f}원")
+
+            trades = active[active["유형"].isin(("매수", "매도"))].copy()
+            if not trades.empty:
+                trades["증감수량"] = np.where(trades["유형"] == "매수", trades["수량"], -trades["수량"])
+                holdings = trades.groupby(["시장", "종목코드", "종목명"], dropna=False)["증감수량"].sum().reset_index()
+                holdings = holdings[holdings["증감수량"].abs() > 1e-10].rename(columns={"증감수량": "보유수량"})
+                st.subheader("보유수량")
+                st.dataframe(holdings, use_container_width=True, hide_index=True)
+                st.caption("평가금액과 손익은 Google Sheet 연결 후 일반 종가를 받아 계산합니다.")
+
+    with rebalance_tab:
+        st.subheader("프리셋 3 월간 운용")
+        st.markdown(
+            "- **프리셋 1:** 분산투자 방어형 50%\n"
+            "- **프리셋 2:** 집중투자 공격형 50%\n"
+            "- **운용 시작:** 2026-11-02 시가\n"
+            "- **다음 기록:** 월말 미국 종가 확정 후 GitHub Actions가 자동 저장"
+        )
+        st.info("Google Sheet 연결 후 목표 비중, 실제 비중, 매수·매도 필요 수량과 월간 성과가 여기에 표시됩니다.")
 
 
 def _momentum_editor(label: str, spec: MomentumSpec, key: str) -> MomentumSpec:
