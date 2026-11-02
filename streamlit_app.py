@@ -780,73 +780,128 @@ def _trade_entry_page() -> None:
         if ledger.empty:
             st.info("입력된 거래내역이 없습니다.")
         else:
-            display_columns = [
-                "거래ID", "입력시각", "거래일", "유형", "종목코드", "종목명",
-                "수량", "체결단가", "금액", "상태",
-            ]
-            editable = ledger[display_columns].copy()
-            editable.insert(0, "수정", False)
-            edited = st.data_editor(
-                editable,
-                use_container_width=True,
-                hide_index=True,
-                disabled=display_columns,
-                column_config={"수정": st.column_config.CheckboxColumn("수정", default=False)},
-                key=f"ledger_editor_{selected_account}",
-            )
-            selected_ids = edited.loc[edited["수정"], "거래ID"].astype(str).tolist()
-            if len(selected_ids) > 1:
-                st.warning("한 번에 한 내역만 선택하세요.")
-            elif len(selected_ids) == 1:
-                transaction_id = selected_ids[0]
-                source = next(row for row in drafts if str(row["거래ID"]) == transaction_id)
+            edit_state_key = f"ledger_edit_id::{selected_account}"
+            delete_state_key = f"ledger_delete_id::{selected_account}"
+            active_edit_id = str(st.session_state.get(edit_state_key, ""))
+            pending_delete_id = str(st.session_state.get(delete_state_key, ""))
+
+            for _, row in ledger.iterrows():
+                transaction_id = str(row["거래ID"])
+                is_active = str(row.get("상태", "정상")) == "정상"
                 with st.container(border=True):
-                    st.subheader("선택 내역 수정")
-                    changes = _transaction_form(
-                        prefix=f"edit_{selected_account}_{transaction_id}",
-                        submit_label="수정 내용 저장",
-                        initial=source,
+                    delete_column, edit_column, summary_column = st.columns([1, 1, 5])
+                    if delete_column.button(
+                        "삭제",
+                        key=f"delete_{selected_account}_{transaction_id}",
+                        disabled=not is_active,
+                        use_container_width=True,
+                    ):
+                        st.session_state[delete_state_key] = transaction_id
+                        st.session_state.pop(edit_state_key, None)
+                        st.rerun()
+                    if edit_column.button(
+                        "수정",
+                        key=f"edit_{selected_account}_{transaction_id}",
+                        disabled=not is_active,
+                        use_container_width=True,
+                    ):
+                        st.session_state[edit_state_key] = transaction_id
+                        st.session_state.pop(delete_state_key, None)
+                        st.rerun()
+
+                    symbol = str(row.get("종목코드", "")).strip() or "현금"
+                    name = str(row.get("종목명", "")).strip()
+                    summary_column.markdown(
+                        f'**{row["입력시각"]} · {row["유형"]} · {symbol}**'
                     )
-                    if changes is not None:
-                        if sheet_store is not None:
-                            try:
-                                if not sheet_store.update_transaction(
-                                    selected_account, transaction_id, changes,
-                                ):
-                                    st.error("수정할 내역을 찾지 못했습니다.")
+                    details = [f'거래일 {row["거래일"]}']
+                    if name:
+                        details.append(name)
+                    if row["유형"] in ("매수", "매도"):
+                        details.extend((f'수량 {row["수량"]}', f'체결단가 {row["체결단가"]}'))
+                    raw_amount = str(row.get("금액", "") or "0").replace(",", "")
+                    try:
+                        amount = float(raw_amount)
+                    except ValueError:
+                        amount = 0.0
+                    details.append(f"금액 {amount:,.0f}원")
+                    if not is_active:
+                        details.append("삭제됨")
+                    summary_column.caption(" · ".join(details))
+
+                    if pending_delete_id == transaction_id and is_active:
+                        st.warning("이 내역을 삭제하면 계좌 계산에서 제외됩니다. 기록은 취소 상태로 보존됩니다.")
+                        confirm_column, cancel_column = st.columns(2)
+                        if confirm_column.button(
+                            "삭제 확인",
+                            type="primary",
+                            key=f"confirm_delete_{selected_account}_{transaction_id}",
+                            use_container_width=True,
+                        ):
+                            if sheet_store is not None:
+                                try:
+                                    deleted = sheet_store.cancel_transaction(selected_account, transaction_id)
+                                except Exception as error:
+                                    st.error(f"삭제하지 못했습니다: {error}")
                                 else:
-                                    st.success("수정한 내용을 저장했습니다.")
-                                    st.rerun()
-                            except Exception as error:
-                                st.error(f"수정하지 못했습니다: {error}")
-                        else:
-                            source.update(changes)
-                            source["수정시각"] = dt.datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M:%S")
+                                    if deleted:
+                                        st.session_state.pop(delete_state_key, None)
+                                        st.rerun()
+                                    st.error("삭제할 내역을 찾지 못했습니다.")
+                            else:
+                                source = next(
+                                    item for item in drafts if str(item["거래ID"]) == transaction_id
+                                )
+                                source["상태"] = "취소"
+                                source["수정시각"] = dt.datetime.now(
+                                    ZoneInfo("Asia/Seoul")
+                                ).strftime("%Y-%m-%d %H:%M:%S")
+                                st.session_state.pop(delete_state_key, None)
+                                st.rerun()
+                        if cancel_column.button(
+                            "돌아가기",
+                            key=f"cancel_delete_{selected_account}_{transaction_id}",
+                            use_container_width=True,
+                        ):
+                            st.session_state.pop(delete_state_key, None)
                             st.rerun()
+
+                    if active_edit_id == transaction_id and is_active:
+                        source = next(
+                            item for item in drafts if str(item["거래ID"]) == transaction_id
+                        )
+                        st.subheader("선택 내역 수정")
+                        changes = _transaction_form(
+                            prefix=f"edit_{selected_account}_{transaction_id}",
+                            submit_label="수정 내용 저장",
+                            initial=source,
+                        )
+                        if changes is not None:
+                            if sheet_store is not None:
+                                try:
+                                    updated = sheet_store.update_transaction(
+                                        selected_account, transaction_id, changes,
+                                    )
+                                except Exception as error:
+                                    st.error(f"수정하지 못했습니다: {error}")
+                                else:
+                                    if updated:
+                                        st.session_state.pop(edit_state_key, None)
+                                        st.rerun()
+                                    st.error("수정할 내역을 찾지 못했습니다.")
+                            else:
+                                source.update(changes)
+                                source["수정시각"] = dt.datetime.now(
+                                    ZoneInfo("Asia/Seoul")
+                                ).strftime("%Y-%m-%d %H:%M:%S")
+                                st.session_state.pop(edit_state_key, None)
+                                st.rerun()
             st.download_button(
                 "CSV 백업 다운로드",
                 ledger.drop(columns=["_정렬시각"], errors="ignore").to_csv(index=False).encode("utf-8-sig"),
                 file_name=f"{selected_account}_transactions.csv",
                 mime="text/csv", use_container_width=True,
             )
-            active = ledger[ledger["상태"] == "정상"]
-            if not active.empty:
-                labels = {
-                    str(row["거래ID"]): f'{row["입력시각"]} · {row["유형"]} · {row["종목코드"] or "현금"}'
-                    for _, row in active.iterrows()
-                }
-                cancel_id = st.selectbox("취소할 내역", tuple(labels), format_func=labels.get)
-                if st.button("선택 내역 취소", use_container_width=True):
-                    if sheet_store is not None:
-                        if sheet_store.cancel_transaction(selected_account, cancel_id):
-                            st.rerun()
-                        st.error("취소할 내역을 찾지 못했습니다.")
-                    else:
-                        for item in drafts:
-                            if str(item["거래ID"]) == cancel_id:
-                                item["상태"] = "취소"
-                                break
-                        st.rerun()
 
     with rebalance_tab:
         st.subheader("프리셋 3 월간 운용")
