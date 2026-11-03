@@ -171,7 +171,39 @@ def _google_sheet_store() -> tuple[GoogleSheetAccountStore | None, str | None]:
         return None, f"Google Sheet에 연결하지 못했습니다: {error}"
 
 
-@st.cache_data(ttl=900, show_spinner=False)
+def _account_sheet_cache_key(store: GoogleSheetAccountStore) -> str:
+    """Return a non-secret key that separates cached data by spreadsheet."""
+    spreadsheet_id = str(getattr(store.spreadsheet, "id", store.title))
+    return hashlib.sha256(spreadsheet_id.encode("utf-8")).hexdigest()[:16]
+
+
+@st.cache_data(ttl=5 * 60, max_entries=4, show_spinner=False)
+def _cached_account_tabs(
+    sheet_cache_key: str,
+    _store: GoogleSheetAccountStore,
+) -> tuple[str, ...]:
+    del sheet_cache_key
+    return _store.list_account_tabs()
+
+
+@st.cache_data(ttl=60, max_entries=32, show_spinner=False)
+def _cached_account_transactions(
+    sheet_cache_key: str,
+    account_tab: str,
+    _store: GoogleSheetAccountStore,
+) -> list[dict[str, object]]:
+    del sheet_cache_key
+    return _store.load_transactions(account_tab)
+
+
+def _clear_account_sheet_cache(*, include_tabs: bool = False) -> None:
+    """Invalidate account data after a write or an explicit user refresh."""
+    _cached_account_transactions.clear()
+    if include_tabs:
+        _cached_account_tabs.clear()
+
+
+@st.cache_data(ttl=900, max_entries=8, show_spinner=False)
 def _cached_account_prices(
     symbols: tuple[str, ...],
     start_text: str,
@@ -641,13 +673,16 @@ def _trade_entry_page() -> None:
     st.session_state.setdefault("trade_drafts_by_account", {DEFAULT_ACCOUNT_TAB: []})
     if sheet_store is not None:
         try:
-            account_tabs = sheet_store.list_account_tabs()
+            sheet_cache_key = _account_sheet_cache_key(sheet_store)
+            account_tabs = _cached_account_tabs(sheet_cache_key, sheet_store)
             st.success(f"Google Sheet 연결됨: {sheet_store.title}")
         except Exception as error:
             sheet_store = None
+            sheet_cache_key = ""
             account_tabs = (DEFAULT_ACCOUNT_TAB,)
             sheet_error = f"계좌 탭을 읽지 못했습니다: {error}"
     else:
+        sheet_cache_key = ""
         account_tabs = tuple(st.session_state.trade_drafts_by_account) or (DEFAULT_ACCOUNT_TAB,)
     if sheet_error:
         st.error(sheet_error)
@@ -668,6 +703,15 @@ def _trade_entry_page() -> None:
         format_func=account_display_name,
         key="selected_account_tab",
     )
+    if sheet_store is not None:
+        if st.button(
+            "Google Sheet 새로고침",
+            help="Google Sheet를 직접 수정했거나 최신 내역이 바로 보이지 않을 때 사용하세요.",
+            use_container_width=True,
+        ):
+            _clear_account_sheet_cache(include_tabs=True)
+            st.rerun()
+        st.caption("계좌 목록은 5분, 거래내역은 1분간 임시 보관됩니다. 저장·수정·삭제 후에는 즉시 갱신됩니다.")
     with st.expander("계좌 추가"):
         if sheet_store is None:
             st.caption("Google Sheet 연결 후 계좌 탭을 추가할 수 있습니다.")
@@ -678,6 +722,7 @@ def _trade_entry_page() -> None:
             if create_account:
                 try:
                     created_tab = sheet_store.create_account_tab(new_account_name)
+                    _clear_account_sheet_cache(include_tabs=True)
                     st.session_state.pending_account_tab = created_tab
                     st.session_state.account_notice = f"{created_tab} 탭을 만들었습니다."
                     st.rerun()
@@ -686,7 +731,9 @@ def _trade_entry_page() -> None:
 
     if sheet_store is not None:
         try:
-            drafts: list[dict[str, object]] = sheet_store.load_transactions(selected_account)
+            drafts: list[dict[str, object]] = _cached_account_transactions(
+                sheet_cache_key, selected_account, sheet_store,
+            )
         except Exception as error:
             drafts = []
             st.error(f"선택한 계좌 내역을 읽지 못했습니다: {error}")
@@ -710,6 +757,7 @@ def _trade_entry_page() -> None:
             if sheet_store is not None:
                 try:
                     sheet_store.append_transaction(selected_account, record)
+                    _clear_account_sheet_cache()
                     st.success("선택한 계좌 탭에 저장했습니다.")
                     st.rerun()
                 except Exception as error:
@@ -845,6 +893,7 @@ def _trade_entry_page() -> None:
                                     st.error(f"삭제하지 못했습니다: {error}")
                                 else:
                                     if deleted:
+                                        _clear_account_sheet_cache()
                                         st.session_state.pop(delete_state_key, None)
                                         st.rerun()
                                     st.error("삭제할 내역을 찾지 못했습니다.")
@@ -886,6 +935,7 @@ def _trade_entry_page() -> None:
                                     st.error(f"수정하지 못했습니다: {error}")
                                 else:
                                     if updated:
+                                        _clear_account_sheet_cache()
                                         st.session_state.pop(edit_state_key, None)
                                         st.rerun()
                                     st.error("수정할 내역을 찾지 못했습니다.")
@@ -1235,17 +1285,17 @@ def _strategy_controls(base: PortfolioPreset, *, domestic_execution: bool = Fals
     )
 
 
-@st.cache_data(ttl=6 * 60 * 60, show_spinner=False)
+@st.cache_data(ttl=6 * 60 * 60, max_entries=12, show_spinner=False)
 def _prices(symbols: tuple[str, ...], start_iso: str, end_iso: str) -> PriceBundle:
     return download_yahoo_prices(symbols, pd.Timestamp(start_iso), pd.Timestamp(end_iso))
 
 
-@st.cache_data(ttl=24 * 60 * 60, show_spinner=False)
+@st.cache_data(ttl=24 * 60 * 60, max_entries=24, show_spinner=False)
 def _market_data(signals: tuple[str, ...], start_iso: str, end_iso: str, mode: str) -> dict[str, pd.Series]:
     return load_strategy_market_data(signals, start_iso, end_iso, mode=mode)
 
 
-@st.cache_data(ttl=24 * 60 * 60, show_spinner=False)
+@st.cache_data(ttl=24 * 60 * 60, max_entries=2, show_spinner=False)
 def _latest_dividend_snapshot() -> pd.DataFrame:
     return download_latest_sp500_dividend_snapshot()
 
