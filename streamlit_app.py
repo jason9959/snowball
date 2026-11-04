@@ -16,6 +16,7 @@ import streamlit as st
 
 from snowball import account_store as _account_store
 from snowball.accounting import (
+    account_period_metrics,
     calculate_account_valuation,
     download_unadjusted_closes,
     required_price_symbols,
@@ -220,7 +221,7 @@ def _home_page() -> None:
         <div class="home-hero">
           <div class="home-kicker">SNOWBALL PORTFOLIO LAB</div>
           <div class="home-title">투자 전략과 실제 운용을 한곳에서</div>
-          <p class="home-copy">전략을 검증하거나 실제 체결 내역을 기록할 기능을 선택하세요.</p>
+          <p class="home-copy">전략을 검증하거나 실제 계좌의 운용 현황을 확인하세요.</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -238,15 +239,15 @@ def _home_page() -> None:
                 _go_to("backtest")
     with right:
         with st.container(border=True):
-            st.subheader("🧾 매수·매도 입력")
+            st.subheader("📈 투자 계좌 현황")
             st.markdown(
-                '<div class="feature-copy">실제 체결 수량과 단가를 기록하고 다음 월간 메일의 '
-                "실계좌 성과 계산에 활용합니다.</div>",
+                '<div class="feature-copy">Google Sheet의 거래기록을 바탕으로 평가액, 수익률, '
+                "MDD와 보유종목을 확인합니다.</div>",
                 unsafe_allow_html=True,
             )
-            if st.button("거래내역 입력", use_container_width=True):
+            if st.button("계좌 현황 보기", use_container_width=True):
                 _go_to("trades")
-    st.caption("실제 계좌 내역은 비공개 Google Sheet의 ‘계좌_’ 탭별로 저장됩니다.")
+    st.caption("거래 입력·수정은 비공개 Google Sheet의 ‘계좌_’ 탭에서 진행합니다.")
 
 
 def _legacy_trade_entry_page() -> None:
@@ -664,7 +665,59 @@ def _account_value_chart(history: pd.DataFrame) -> None:
     )
 
 
-def _trade_entry_page() -> None:
+def _account_performance_chart(history: pd.DataFrame) -> None:
+    if history.empty or not {"누적수익률", "낙폭"}.issubset(history.columns):
+        return
+    chart = history.reset_index().rename(columns={"index": "날짜"})
+    st.vega_lite_chart(
+        chart,
+        {
+            "layer": [
+                {
+                    "mark": {"type": "line", "color": "#3157d5", "strokeWidth": 2.5},
+                    "encoding": {
+                        "x": {"field": "날짜", "type": "temporal", "title": None},
+                        "y": {
+                            "field": "누적수익률", "type": "quantitative", "title": "수익률",
+                            "axis": {"format": ".1%"},
+                        },
+                        "tooltip": [
+                            {"field": "날짜", "type": "temporal"},
+                            {"field": "누적수익률", "type": "quantitative", "format": ".2%"},
+                        ],
+                    },
+                },
+                {
+                    "mark": {"type": "area", "color": "#ef4444", "opacity": 0.18},
+                    "encoding": {
+                        "x": {"field": "날짜", "type": "temporal", "title": None},
+                        "y": {
+                            "field": "낙폭", "type": "quantitative", "title": "수익률",
+                            "axis": {"format": ".1%"},
+                        },
+                        "tooltip": [
+                            {"field": "날짜", "type": "temporal"},
+                            {"field": "낙폭", "type": "quantitative", "format": ".2%"},
+                        ],
+                    },
+                },
+            ],
+            "height": 280,
+        },
+        use_container_width=True,
+    )
+
+
+def _account_metric_cards(items: tuple[tuple[str, str], ...]) -> None:
+    cards = "".join(
+        f'<div class="metric-card"><div class="metric-label">{label}</div>'
+        f'<div class="metric-value">{value}</div></div>'
+        for label, value in items
+    )
+    st.markdown(f'<div class="metric-grid">{cards}</div>', unsafe_allow_html=True)
+
+
+def _legacy_account_management_page() -> None:
     if st.button("← 기능 선택으로", key="trade_home"):
         _go_to("home")
     st.title("🧾 계좌 관리")
@@ -952,6 +1005,217 @@ def _trade_entry_page() -> None:
                 file_name=f"{selected_account}_transactions.csv",
                 mime="text/csv", use_container_width=True,
             )
+
+    with rebalance_tab:
+        st.subheader("프리셋 3 월간 운용")
+        st.markdown(
+            "- **프리셋 1:** 분산투자 방어형 50%\n"
+            "- **프리셋 2:** 집중투자 공격형 50%\n"
+            "- **운용 시작:** 2026-11-02 시가\n"
+            "- **선택 계좌:** " + account_display_name(selected_account)
+        )
+        st.info("다음 단계에서 월말 목표 비중과 실제 계좌 비중을 비교해 표시합니다.")
+
+
+def _trade_entry_page() -> None:
+    """Read-only account dashboard backed by account-prefixed Sheet tabs."""
+    if st.button("← 기능 선택으로", key="account_home"):
+        _go_to("home")
+    st.title("📊 투자 계좌 현황")
+    st.write("Google Sheet에 기록한 투자 이력과 현재 운용 성과를 조회합니다.")
+
+    sheet_store, sheet_error = _google_sheet_store()
+    if sheet_store is None:
+        if sheet_error:
+            st.error(sheet_error)
+        else:
+            st.info("Google Sheet 연결 정보가 필요합니다.")
+        return
+
+    try:
+        sheet_cache_key = _account_sheet_cache_key(sheet_store)
+        account_tabs = _cached_account_tabs(sheet_cache_key, sheet_store)
+    except Exception as error:
+        st.error(f"계좌 목록을 불러오지 못했습니다: {error}")
+        return
+    if not account_tabs:
+        st.info("이름이 ‘계좌_’로 시작하는 Google Sheet 탭을 먼저 만들어주세요.")
+        return
+
+    if st.session_state.get("dashboard_account_tab") not in account_tabs:
+        st.session_state.dashboard_account_tab = account_tabs[0]
+    selected_account = st.selectbox(
+        "계좌 선택",
+        account_tabs,
+        format_func=account_display_name,
+        key="dashboard_account_tab",
+    )
+    refresh_sheet, refresh_prices = st.columns(2)
+    if refresh_sheet.button(
+        "Google Sheet 새로고침",
+        help="Sheet에서 거래를 입력하거나 수정한 뒤 누르면 즉시 다시 읽습니다.",
+        use_container_width=True,
+    ):
+        _clear_account_sheet_cache(include_tabs=True)
+        st.rerun()
+    if refresh_prices.button(
+        "시세 새로고침",
+        help="Yahoo Finance 종가와 환율 캐시를 비우고 다시 불러옵니다.",
+        use_container_width=True,
+    ):
+        _cached_account_prices.clear()
+        st.rerun()
+    st.caption(
+        f"원본 입력·수정 위치: Google Sheet의 `{selected_account}` 탭 · "
+        "계좌 목록 5분, 거래내역 1분, 시세 15분 캐시"
+    )
+
+    try:
+        records: list[dict[str, object]] = _cached_account_transactions(
+            sheet_cache_key, selected_account, sheet_store,
+        )
+    except Exception as error:
+        st.error(f"선택한 계좌 내역을 불러오지 못했습니다: {error}")
+        return
+
+    active_frame = transaction_frame(records)
+    if active_frame.empty:
+        st.info("정상 상태의 거래가 없습니다. Google Sheet에 입금과 거래내역을 입력해 주세요.")
+        return
+
+    first_date = active_frame["거래일"].min().date()
+    today = dt.datetime.now(ZoneInfo("Asia/Seoul")).date()
+    from_key = f"account_from::{selected_account}"
+    to_key = f"account_to::{selected_account}"
+    if from_key not in st.session_state or not first_date <= st.session_state[from_key] <= today:
+        st.session_state[from_key] = first_date
+    if to_key not in st.session_state or not first_date <= st.session_state[to_key] <= today:
+        st.session_state[to_key] = today
+    date_left, date_right = st.columns(2)
+    from_date = date_left.date_input(
+        "조회 시작일",
+        min_value=first_date,
+        max_value=today,
+        key=from_key,
+    )
+    to_date = date_right.date_input(
+        "조회 종료일",
+        min_value=first_date,
+        max_value=today,
+        key=to_key,
+    )
+    if from_date > to_date:
+        st.error("조회 시작일은 종료일보다 앞서야 합니다.")
+        return
+
+    symbols = required_price_symbols(active_frame)
+    closes = pd.DataFrame()
+    usdkrw = pd.Series(dtype=float)
+    if symbols:
+        try:
+            with st.spinner("계좌 평가에 필요한 종가와 환율을 불러오는 중입니다…"):
+                closes, usdkrw = _cached_account_prices(
+                    symbols, first_date.isoformat(), today.isoformat(),
+                )
+        except Exception as error:
+            st.error(f"시세를 불러오지 못했습니다: {error}")
+            return
+
+    start_ts = pd.Timestamp(from_date)
+    end_ts = pd.Timestamp(to_date)
+    frame_to_end = active_frame[active_frame["거래일"] <= end_ts].copy()
+    if frame_to_end.empty:
+        st.info("선택한 종료일까지의 거래가 없습니다.")
+        return
+    valuation = calculate_account_valuation(
+        frame_to_end, closes, usdkrw, end_date=end_ts,
+    )
+    performance = account_period_metrics(valuation.history, start_ts, end_ts)
+    period_frame = frame_to_end[
+        (frame_to_end["거래일"] >= start_ts) & (frame_to_end["거래일"] <= end_ts)
+    ]
+    period_deposits = float(
+        period_frame.loc[period_frame["유형"] == "입금", "원화금액"].sum()
+    )
+    period_withdrawals = float(
+        period_frame.loc[period_frame["유형"] == "출금", "원화금액"].sum()
+    )
+    cumulative_deposits = float(
+        frame_to_end.loc[frame_to_end["유형"] == "입금", "원화금액"].sum()
+    )
+    cumulative_withdrawals = float(
+        frame_to_end.loc[frame_to_end["유형"] == "출금", "원화금액"].sum()
+    )
+
+    def display_percent(value: float | None) -> str:
+        return "-" if value is None or not np.isfinite(value) else f"{value:.2%}"
+
+    dashboard_tab, holdings_tab, history_tab, rebalance_tab = st.tabs(
+        ("📊 투자 대시보드", "💼 보유종목", "📋 투자이력", "🔔 리밸런싱 기록"),
+    )
+    with dashboard_tab:
+        st.subheader(f"{account_display_name(selected_account)} · {to_date:%Y-%m-%d} 기준")
+        _account_metric_cards((
+            ("총 평가액", f"{valuation.total_value:,.0f}원"),
+            ("현금", f"{valuation.cash:,.0f}원"),
+            ("보유자산 평가액", f"{valuation.holdings_value:,.0f}원"),
+            ("누적 입금", f"{cumulative_deposits:,.0f}원"),
+            ("누적 출금", f"{cumulative_withdrawals:,.0f}원"),
+            ("누적 평가손익", f"{valuation.profit:,.0f}원"),
+            ("누적 단순수익률", display_percent(valuation.return_rate)),
+            ("기간 입금", f"{period_deposits:,.0f}원"),
+            ("기간 출금", f"{period_withdrawals:,.0f}원"),
+            ("기간 수익률(TWR)", display_percent(performance.period_return)),
+            ("연환산 수익률", display_percent(performance.annualized_return)),
+            ("최대 낙폭(MDD)", display_percent(performance.max_drawdown)),
+            ("현재 낙폭", display_percent(performance.current_drawdown)),
+        ))
+        st.caption(
+            "기간수익률과 낙폭은 입출금 영향을 제거한 시간가중수익률(TWR) 기준입니다. "
+            "누적 단순수익률은 총평가액과 누적 순입금의 차이를 기준으로 합니다."
+        )
+        value_chart, return_chart = st.tabs(("평가액·입출금", "수익률·낙폭"))
+        with value_chart:
+            _account_value_chart(performance.history)
+        with return_chart:
+            _account_performance_chart(performance.history)
+
+    with holdings_tab:
+        st.subheader(f"{to_date:%Y-%m-%d} 기준 보유종목")
+        if valuation.holdings.empty:
+            st.info("선택한 종료일에 보유 중인 종목이 없습니다.")
+        else:
+            holdings = valuation.holdings.copy()
+            holdings["현재가"] = holdings["현재가"].map(lambda value: f"{value:,.2f}")
+            holdings["환율"] = holdings["환율"].map(lambda value: f"{value:,.2f}")
+            holdings["평가금액"] = holdings["평가금액"].map(lambda value: f"{value:,.0f}원")
+            st.dataframe(holdings, use_container_width=True, hide_index=True)
+
+    with history_tab:
+        st.subheader(f"투자이력 · {from_date:%Y-%m-%d} ~ {to_date:%Y-%m-%d}")
+        ledger = pd.DataFrame(records)
+        if ledger.empty:
+            st.info("거래내역이 없습니다.")
+        else:
+            ledger["_거래일"] = pd.to_datetime(ledger["거래일"], errors="coerce")
+            ledger["_입력시각"] = pd.to_datetime(ledger["입력시각"], errors="coerce")
+            ledger = ledger[
+                (ledger["_거래일"] >= start_ts) & (ledger["_거래일"] <= end_ts)
+            ].sort_values(["_거래일", "_입력시각"], ascending=False, kind="stable")
+            display_columns = [
+                "입력시각", "거래일", "유형", "시장", "종목코드", "종목명", "수량",
+                "체결단가", "수수료·세금", "금액", "통화", "환율", "메모", "상태",
+            ]
+            display_columns = [column for column in display_columns if column in ledger]
+            st.dataframe(ledger[display_columns], use_container_width=True, hide_index=True)
+            st.download_button(
+                "조회기간 CSV 다운로드",
+                ledger[display_columns].to_csv(index=False).encode("utf-8-sig"),
+                file_name=f"{selected_account}_{from_date}_{to_date}.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+        st.info("거래내역 추가·수정·삭제는 Google Sheet에서 진행한 뒤 상단의 새로고침 버튼을 눌러주세요.")
 
     with rebalance_tab:
         st.subheader("프리셋 3 월간 운용")

@@ -5,6 +5,7 @@ import unittest
 import pandas as pd
 
 from snowball.accounting import (
+    account_period_metrics,
     calculate_account_valuation,
     required_price_symbols,
     transaction_frame,
@@ -59,6 +60,54 @@ class AccountingTest(unittest.TestCase):
             "메모": "", "상태": "취소", "수정시각": "",
         }
         self.assertTrue(transaction_frame([record]).empty)
+
+    def test_manual_sheet_row_accepts_blank_status_and_derives_trade_amount(self):
+        record = {
+            "거래ID": "", "입력시각": "", "거래일": "2026-11-01",
+            "유형": "매수", "시장": "한국", "종목코드": "069500",
+            "종목명": "KODEX 200", "수량": 3, "체결단가": 10_000,
+            "수수료·세금": 0, "금액": "", "통화": "KRW", "환율": 1,
+            "메모": "", "상태": "", "수정시각": "",
+        }
+        frame = transaction_frame([record])
+        self.assertEqual(len(frame), 1)
+        self.assertEqual(float(frame.iloc[0]["금액"]), 30_000)
+
+    def test_external_deposit_does_not_create_investment_return(self):
+        records = [
+            {
+                "거래ID": identifier, "입력시각": f"2026-11-0{day} 09:00:00",
+                "거래일": f"2026-11-0{day}", "유형": "입금", "시장": "현금",
+                "종목코드": "현금", "종목명": "", "수량": 0, "체결단가": 0,
+                "수수료·세금": 0, "금액": amount, "통화": "KRW", "환율": 1,
+                "메모": "", "상태": "정상", "수정시각": "",
+            }
+            for identifier, day, amount in (("first", 1, 1_000_000), ("second", 2, 2_000_000))
+        ]
+        valuation = calculate_account_valuation(
+            transaction_frame(records), end_date=pd.Timestamp("2026-11-02"),
+        )
+        metrics = account_period_metrics(
+            valuation.history, pd.Timestamp("2026-11-01"), pd.Timestamp("2026-11-02"),
+        )
+        self.assertAlmostEqual(metrics.period_return or 0, 0.0)
+        self.assertAlmostEqual(metrics.max_drawdown or 0, 0.0)
+
+    def test_period_metrics_rebase_and_measure_drawdown(self):
+        history = pd.DataFrame(
+            {
+                "총평가액": [100.0, 110.0, 110.0, 88.0],
+                "입출금": [100.0, 0.0, 0.0, 0.0],
+                "일수익률": [0.0, 0.10, 0.0, -0.20],
+            },
+            index=pd.date_range("2026-01-01", periods=4, freq="D"),
+        )
+        metrics = account_period_metrics(
+            history, pd.Timestamp("2026-01-01"), pd.Timestamp("2026-01-04"),
+        )
+        self.assertAlmostEqual(metrics.period_return or 0, -0.12)
+        self.assertAlmostEqual(metrics.max_drawdown or 0, -0.20)
+        self.assertAlmostEqual(metrics.current_drawdown or 0, -0.20)
 
 
 if __name__ == "__main__":

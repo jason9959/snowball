@@ -21,6 +21,15 @@ class AccountValuation:
     return_rate: float | None
 
 
+@dataclass(frozen=True)
+class AccountPeriodMetrics:
+    history: pd.DataFrame
+    period_return: float | None
+    annualized_return: float | None
+    max_drawdown: float | None
+    current_drawdown: float | None
+
+
 def yahoo_symbol(code: Any, market: Any) -> str:
     ticker = str(code or "").strip().upper()
     if str(market) == "한국":
@@ -38,7 +47,8 @@ def transaction_frame(
     frame = pd.DataFrame(records)
     if frame.empty:
         return frame
-    active = frame["상태"].astype(str) == "정상"
+    status = frame["상태"].fillna("").astype(str).str.strip()
+    active = status.isin(("", "정상"))
     if account_id is not None:
         if "계좌ID" not in frame:
             frame["계좌ID"] = "default"
@@ -50,6 +60,11 @@ def transaction_frame(
     frame = frame.dropna(subset=["거래일"])
     for column in ("수량", "체결단가", "수수료·세금", "금액", "환율"):
         frame[column] = pd.to_numeric(frame[column], errors="coerce").fillna(0.0)
+    missing_trade_amount = frame["유형"].isin(("매수", "매도")) & frame["금액"].eq(0.0)
+    frame.loc[missing_trade_amount, "금액"] = (
+        frame.loc[missing_trade_amount, "수량"]
+        * frame.loc[missing_trade_amount, "체결단가"]
+    )
     frame["원화금액"] = frame["금액"] * frame["환율"].replace(0, np.nan).fillna(1.0)
     frame["원화비용"] = frame["수수료·세금"] * frame["환율"].replace(0, np.nan).fillna(1.0)
     frame["Yahoo종목"] = [
@@ -189,6 +204,11 @@ def calculate_account_valuation(
         "현금": cash_balance,
         "입출금": daily_external,
     }, index=dates)
+    previous_value = history["총평가액"].shift(1)
+    daily_return = (
+        (history["총평가액"] - history["입출금"]) / previous_value - 1.0
+    ).where(previous_value.abs() > 1e-10, 0.0)
+    history["일수익률"] = daily_return.replace([np.inf, -np.inf], np.nan).fillna(0.0)
     total_value = float(history["총평가액"].iloc[-1])
     net_deposits = float(daily_external.sum())
     profit = total_value - net_deposits
@@ -205,4 +225,42 @@ def calculate_account_valuation(
         total_value=total_value,
         profit=profit,
         return_rate=return_rate,
+    )
+
+
+def account_period_metrics(
+    history: pd.DataFrame,
+    start_date: pd.Timestamp,
+    end_date: pd.Timestamp,
+) -> AccountPeriodMetrics:
+    """Return cash-flow-adjusted performance metrics for one display period."""
+    if history.empty:
+        return AccountPeriodMetrics(pd.DataFrame(), None, None, None, None)
+    start = pd.Timestamp(start_date).normalize()
+    end = pd.Timestamp(end_date).normalize()
+    selected = history.loc[(history.index >= start) & (history.index <= end)].copy()
+    if selected.empty:
+        return AccountPeriodMetrics(selected, None, None, None, None)
+
+    returns = selected.get("일수익률", pd.Series(0.0, index=selected.index)).copy()
+    # The selected start date is the baseline close for a custom period. For the
+    # inception period this is also correct because the first deposit is external.
+    returns.iloc[0] = 0.0
+    growth = (1.0 + returns).cumprod()
+    selected["누적수익률"] = growth - 1.0
+    selected["낙폭"] = growth / growth.cummax() - 1.0
+
+    period_return = float(selected["누적수익률"].iloc[-1])
+    max_drawdown = float(selected["낙폭"].min())
+    current_drawdown = float(selected["낙폭"].iloc[-1])
+    elapsed_days = int((selected.index[-1] - selected.index[0]).days)
+    annualized_return = None
+    if elapsed_days > 0 and period_return > -1.0:
+        annualized_return = float((1.0 + period_return) ** (365.25 / elapsed_days) - 1.0)
+    return AccountPeriodMetrics(
+        history=selected,
+        period_return=period_return,
+        annualized_return=annualized_return,
+        max_drawdown=max_drawdown,
+        current_drawdown=current_drawdown,
     )
