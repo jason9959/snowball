@@ -334,6 +334,7 @@ def _download_spy_distribution_yield(start: pd.Timestamp, end: pd.Timestamp) -> 
         end=(end + pd.Timedelta(days=2)).date().isoformat(),
         auto_adjust=False,
         actions=True,
+        timeout=10,
     )
     result = calculate_spy_distribution_yield(history).loc[start:end]
     if result.empty:

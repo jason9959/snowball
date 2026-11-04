@@ -100,7 +100,8 @@ def download_unadjusted_closes(
         end=pd.Timestamp(end) + pd.Timedelta(days=1),
         auto_adjust=False,
         progress=False,
-        threads=False,
+        threads=True,
+        timeout=8,
         group_by="column",
     )
     if raw is None or raw.empty:

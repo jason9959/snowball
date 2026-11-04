@@ -31,7 +31,7 @@ def download_yahoo_prices(symbols: tuple[str, ...], start: pd.Timestamp, end: pd
     symbols = tuple(dict.fromkeys(symbols))
     raw = yf.download(
         list(symbols), start=start, end=end + pd.Timedelta(days=1), auto_adjust=False,
-        progress=False, threads=False, group_by="column",
+        progress=False, threads=True, timeout=15, group_by="column",
     )
     if raw is None or raw.empty:
         raise ValueError("Yahoo Finance에서 가격 데이터를 가져오지 못했습니다.")

@@ -1113,7 +1113,7 @@ def _trade_entry_page() -> None:
     usdkrw = pd.Series(dtype=float)
     if symbols:
         try:
-            with st.spinner("계좌 평가에 필요한 종가와 환율을 불러오는 중입니다…"):
+            with st.spinner("계좌 평가에 필요한 종가와 환율을 불러오는 중입니다… (최대 약 10초)"):
                 closes, usdkrw = _cached_account_prices(
                     symbols, first_date.isoformat(), today.isoformat(),
                 )
@@ -1146,6 +1146,7 @@ def _trade_entry_page() -> None:
     cumulative_withdrawals = float(
         frame_to_end.loc[frame_to_end["유형"] == "출금", "원화금액"].sum()
     )
+    performance_valid = valuation.cash >= -1e-6
 
     def display_percent(value: float | None) -> str:
         return "-" if value is None or not np.isfinite(value) else f"{value:.2%}"
@@ -1155,6 +1156,11 @@ def _trade_entry_page() -> None:
     )
     with dashboard_tab:
         st.subheader(f"{account_display_name(selected_account)} · {to_date:%Y-%m-%d} 기준")
+        if not performance_valid:
+            st.warning(
+                "현금 잔액이 음수입니다. Google Sheet에서 매수 전에 필요한 입금 내역이 "
+                "모두 기록됐는지 확인해 주세요. 원장이 완성될 때까지 수익률과 낙폭은 표시하지 않습니다."
+            )
         _account_metric_cards((
             ("총 평가액", f"{valuation.total_value:,.0f}원"),
             ("현금", f"{valuation.cash:,.0f}원"),
@@ -1162,13 +1168,13 @@ def _trade_entry_page() -> None:
             ("누적 입금", f"{cumulative_deposits:,.0f}원"),
             ("누적 출금", f"{cumulative_withdrawals:,.0f}원"),
             ("누적 평가손익", f"{valuation.profit:,.0f}원"),
-            ("누적 단순수익률", display_percent(valuation.return_rate)),
+            ("누적 단순수익률", display_percent(valuation.return_rate if performance_valid else None)),
             ("기간 입금", f"{period_deposits:,.0f}원"),
             ("기간 출금", f"{period_withdrawals:,.0f}원"),
-            ("기간 수익률(TWR)", display_percent(performance.period_return)),
-            ("연환산 수익률", display_percent(performance.annualized_return)),
-            ("최대 낙폭(MDD)", display_percent(performance.max_drawdown)),
-            ("현재 낙폭", display_percent(performance.current_drawdown)),
+            ("기간 수익률(TWR)", display_percent(performance.period_return if performance_valid else None)),
+            ("연환산 수익률", display_percent(performance.annualized_return if performance_valid else None)),
+            ("최대 낙폭(MDD)", display_percent(performance.max_drawdown if performance_valid else None)),
+            ("현재 낙폭", display_percent(performance.current_drawdown if performance_valid else None)),
         ))
         st.caption(
             "기간수익률과 낙폭은 입출금 영향을 제거한 시간가중수익률(TWR) 기준입니다. "
@@ -1178,7 +1184,10 @@ def _trade_entry_page() -> None:
         with value_chart:
             _account_value_chart(performance.history)
         with return_chart:
-            _account_performance_chart(performance.history)
+            if performance_valid:
+                _account_performance_chart(performance.history)
+            else:
+                st.info("입금 내역을 보완하면 수익률·낙폭 차트가 표시됩니다.")
 
     with holdings_tab:
         st.subheader(f"{to_date:%Y-%m-%d} 기준 보유종목")
