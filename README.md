@@ -26,6 +26,26 @@ python -m snowball.cli list-presets
 streamlit run streamlit_app.py
 ```
 
+## NiceGUI 개편판
+
+Streamlit 운영판과 나란히 실행할 수 있으며 계산 엔진과 Google Sheet 원장을
+공유합니다.
+
+```bash
+python nicegui_app.py
+```
+
+기본 주소는 `http://localhost:8080`입니다. 로컬에서는 기존
+`.streamlit/secrets.toml`을 재사용하고, 배포 환경에서는 아래 환경변수를
+설정합니다.
+
+- `GOOGLE_SHEET_ID`
+- `GOOGLE_SERVICE_ACCOUNT_JSON`
+- `NICEGUI_STORAGE_SECRET` (배포 시 임의의 긴 문자열)
+
+현재 1단계에서는 메인 메뉴와 `계좌_` 탭 목록을 지원합니다. 계좌 성과
+대시보드와 백테스트 화면을 순서대로 이전합니다.
+
 Streamlit Cloud의 메인 파일 경로는 `streamlit_app.py`입니다.
 배포 의존성은 `requirements.txt`에 명시되어 있으며, `pyproject.toml`은
 Poetry가 감지되더라도 애플리케이션 자체를 별도 패키지로 설치하지 않도록 설정되어 있습니다.
