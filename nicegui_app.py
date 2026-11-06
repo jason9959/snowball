@@ -49,6 +49,7 @@ from snowball.user_presets import (
 
 
 APP_TITLE = "Snowball Portfolio Lab"
+LOCAL_PRESET_STORAGE_KEY = "snowball_user_presets_v1"
 ACCOUNT_CACHE_SECONDS = 300
 TRANSACTION_CACHE_SECONDS = 60
 PRICE_CACHE_SECONDS = 900
@@ -69,6 +70,12 @@ _price_cache: dict[
 ] = {}
 _rebalance_cache: dict[str, tuple[float, RebalanceRecommendation]] = {}
 _data_cache_lock = Lock()
+
+
+@app.get("/healthz")
+async def health_check() -> dict[str, str]:
+    """Lightweight readiness endpoint for container platforms."""
+    return {"status": "ok"}
 
 
 def _connect_store() -> GoogleSheetAccountStore:
@@ -677,6 +684,16 @@ def _save_browser_presets(records: dict[str, UserPreset]) -> None:
     ).decode("utf-8")
 
 
+async def _persist_browser_presets(records: dict[str, UserPreset]) -> None:
+    """Persist on the server and in durable browser localStorage."""
+    payload = export_user_presets(records.values()).decode("utf-8")
+    _save_browser_presets(records)
+    await ui.run_javascript(
+        f"localStorage.setItem({json.dumps(LOCAL_PRESET_STORAGE_KEY)}, "
+        f"{json.dumps(payload, ensure_ascii=False)});"
+    )
+
+
 class _StrategyEditor:
     def __init__(self, record: UserPreset):
         self.base = record.strategy
@@ -1174,7 +1191,7 @@ def backtest_page() -> None:
                             on_click=delete_current,
                         ).props("outline")
 
-        def save_current() -> None:
+        async def save_current() -> None:
             editor = editor_state["editor"]
             if editor is None:
                 ui.notify("저장할 개별 전략이 없습니다.", type="warning")
@@ -1185,7 +1202,7 @@ def backtest_page() -> None:
                 if old_title and old_title != record.title:
                     user_presets.pop(old_title, None)
                 user_presets[record.title] = record
-                _save_browser_presets(user_presets)
+                await _persist_browser_presets(user_presets)
             except ValueError as error:
                 ui.notify(str(error), type="negative")
                 return
@@ -1194,12 +1211,12 @@ def backtest_page() -> None:
             rebuild_editor()
             ui.notify(f"'{record.title}' 프리셋을 저장했습니다.", type="positive")
 
-        def delete_current() -> None:
+        async def delete_current() -> None:
             title = selected_user_title()
             if title is None:
                 return
             user_presets.pop(title, None)
-            _save_browser_presets(user_presets)
+            await _persist_browser_presets(user_presets)
             refresh_preset_select(next(iter(BUILTIN_PRESET_SPECS)))
             update_preset_controls()
             rebuild_editor()
@@ -1215,14 +1232,14 @@ def backtest_page() -> None:
                 media_type="application/json",
             )
 
-        def import_library(event) -> None:
+        async def import_library(event) -> None:
             try:
                 imported = import_user_presets(event.content.read())
                 collisions = [item.title for item in imported if item.title in BUILTIN_PRESET_SPECS]
                 if collisions:
                     raise ValueError("기본 프리셋과 같은 제목은 불러올 수 없습니다.")
                 user_presets.update({item.title: item for item in imported})
-                _save_browser_presets(user_presets)
+                await _persist_browser_presets(user_presets)
             except ValueError as error:
                 ui.notify(str(error), type="negative")
                 return
@@ -1233,6 +1250,29 @@ def backtest_page() -> None:
             update_preset_controls()
             rebuild_editor()
             ui.notify(f"사용자 프리셋 {len(imported)}개를 불러왔습니다.", type="positive")
+
+        async def restore_local_presets() -> None:
+            """Restore after free-host restarts which erase server-side storage."""
+            try:
+                raw = await ui.run_javascript(
+                    f"localStorage.getItem({json.dumps(LOCAL_PRESET_STORAGE_KEY)}) || ''"
+                )
+                if raw:
+                    restored = import_user_presets(str(raw))
+                    user_presets.update({item.title: item for item in restored})
+                    _save_browser_presets(user_presets)
+                elif user_presets:
+                    await _persist_browser_presets(user_presets)
+                else:
+                    return
+            except (ValueError, RuntimeError):
+                ui.notify(
+                    "브라우저 프리셋 자동 복원에 실패했습니다. JSON 백업을 이용해 주세요.",
+                    type="warning",
+                )
+                return
+            refresh_preset_select(str(preset.value or next(iter(BUILTIN_PRESET_SPECS))))
+            rebuild_editor()
 
         def update_preset_controls() -> None:
             custom_title = selected_user_title()
@@ -1257,6 +1297,7 @@ def backtest_page() -> None:
         upload.on_upload(import_library)
         update_preset_controls()
         rebuild_editor()
+        ui.timer(0.2, restore_local_presets, once=True)
 
         async def execute_backtest() -> None:
             run_button.disable()

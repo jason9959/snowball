@@ -1,0 +1,14 @@
+.git
+.github
+.cache
+.nicegui
+.streamlit
+__pycache__
+*.py[cod]
+*.egg-info
+.pytest_cache
+.venv
+build
+dist
+results
+*service-account*.json

@@ -59,6 +59,22 @@ python nicegui_app.py
 예상 매수·매도 금액을 확인하고 비교표를 CSV로 내려받을 수 있습니다. 목표 계산은
 1시간 캐시되며 계좌 첫 화면을 열 때 자동 실행하지 않습니다.
 
+### NiceGUI 시험 배포(Render)
+
+기존 Streamlit 앱은 그대로 두고 `render.yaml` Blueprint로 NiceGUI를 별도
+배포할 수 있습니다.
+
+1. Render에서 `New > Blueprint`를 선택하고 `jason9959/snowball` 저장소를 연결합니다.
+2. Blueprint가 요구하는 `GOOGLE_SHEET_ID`와 `GOOGLE_SERVICE_ACCOUNT_JSON`을 입력합니다.
+3. `NICEGUI_STORAGE_SECRET`은 Blueprint가 자동 생성합니다.
+4. 배포 완료 후 `/healthz`가 `{"status":"ok"}`를 반환하는지 확인합니다.
+5. 홈, 백테스트, 계좌 대시보드를 모바일에서 확인한 뒤 기존 주소 전환 여부를 결정합니다.
+
+무료 Render Web Service는 15분 동안 요청이나 WebSocket 연결이 없으면 절전되고,
+다음 접속의 첫 기동에 약 1분이 걸릴 수 있습니다. 로컬 파일도 재시작 시 유지되지
+않으므로 사용자 프리셋은 같은 브라우저의 `localStorage`에 자동 복제합니다.
+다른 기기 이동과 브라우저 데이터 삭제에 대비한 JSON 백업도 계속 권장합니다.
+
 Streamlit Cloud의 메인 파일 경로는 `streamlit_app.py`입니다.
 배포 의존성은 `requirements.txt`에 명시되어 있으며, `pyproject.toml`은
 Poetry가 감지되더라도 애플리케이션 자체를 별도 패키지로 설치하지 않도록 설정되어 있습니다.

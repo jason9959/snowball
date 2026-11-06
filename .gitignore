@@ -3,6 +3,7 @@ __pycache__/
 .pytest_cache/
 .venv/
 .cache/
+.nicegui/
 dist/
 build/
 *.egg-info/
