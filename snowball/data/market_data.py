@@ -160,20 +160,18 @@ def load_strategy_market_data(
     end_iso: str,
     *,
     mode: str = "refresh_missing",
+    signal_end_iso: str | None = None,
 ) -> dict[str, pd.Series]:
     """Load strategy signals through one path for UI and automation.
 
-    Monthly rebalancing occurs on the first market session and uses the prior
-    session as its signal date. Therefore the latest market-data observation
-    needed for an end date in month M is month M-1. Requiring M itself would
-    fail during every live, still-incomplete month and could introduce a
-    future month-end observation into a mid-month backtest.
+    ``signal_end_iso`` lets a caller distinguish its evaluation end from the
+    last month whose signal can actually be consumed. The interactive monthly
+    backtest passes the prior month, while live mailing passes its completed
+    decision month and therefore remains strict about that observation.
     """
     result: dict[str, pd.Series] = {}
     requested_start = pd.Timestamp(start_iso).to_period("M").to_timestamp("M")
-    signal_end = (
-        pd.Timestamp(end_iso).to_period("M") - 1
-    ).to_timestamp("M")
+    signal_end = pd.Timestamp(signal_end_iso or end_iso).to_period("M").to_timestamp("M")
     market_start = min(requested_start, signal_end)
     market_start_iso = market_start.date().isoformat()
     signal_end_iso = signal_end.date().isoformat()

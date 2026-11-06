@@ -37,6 +37,7 @@ class MarketDataTests(unittest.TestCase):
             result = load_strategy_market_data(
                 ("장단기 금리차 역전 (10년-3개월)",),
                 "2010-01-01", "2026-11-06", mode="fixed",
+                signal_end_iso="2026-10-31",
             )
         self.assertEqual(captured["end"], "2026-10-31")
         self.assertEqual(captured["mode"], "fixed")
@@ -60,10 +61,32 @@ class MarketDataTests(unittest.TestCase):
             result = load_strategy_market_data(
                 ("S&P500 배당수익률",),
                 "2026-11-01", "2026-11-06", mode="fixed",
+                signal_end_iso="2026-10-31",
             )
         self.assertEqual(multpl.call_args.args[1], "2026-10-31")
         self.assertEqual(result["SP500_DIV_YIELD"].index[-1], pd.Timestamp("2026-10-31"))
         self.assertEqual(result["SP500_DIV_YIELD"].iloc[-1], 1.4)
+
+    def test_live_decision_month_is_not_silently_shifted_back(self):
+        captured: dict[str, str] = {}
+
+        def fake_spreads(series_ids, start_iso, end_iso, *, mode):
+            captured["end"] = end_iso
+            return {
+                "T10Y3M": pd.Series(
+                    [0.78], index=pd.to_datetime(["2026-10-31"]), name="T10Y3M",
+                )
+            }
+
+        with patch(
+            "snowball.data.market_data.load_treasury_spreads",
+            side_effect=fake_spreads,
+        ):
+            load_strategy_market_data(
+                ("장단기 금리차 역전 (10년-3개월)",),
+                "2025-01-01", "2026-10-30", mode="latest",
+            )
+        self.assertEqual(captured["end"], "2026-10-31")
 
     def test_packaged_months_do_not_call_network(self):
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:

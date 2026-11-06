@@ -1562,7 +1562,16 @@ def _prices(symbols: tuple[str, ...], start_iso: str, end_iso: str) -> PriceBund
 
 @st.cache_data(ttl=24 * 60 * 60, max_entries=24, show_spinner=False)
 def _market_data(signals: tuple[str, ...], start_iso: str, end_iso: str, mode: str) -> dict[str, pd.Series]:
-    return load_strategy_market_data(signals, start_iso, end_iso, mode=mode)
+    signal_end = (
+        pd.Timestamp(end_iso).to_period("M") - 1
+    ).to_timestamp("M")
+    return load_strategy_market_data(
+        signals,
+        start_iso,
+        end_iso,
+        mode=mode,
+        signal_end_iso=signal_end.date().isoformat(),
+    )
 
 
 @st.cache_data(ttl=24 * 60 * 60, max_entries=2, show_spinner=False)
