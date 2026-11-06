@@ -161,23 +161,40 @@ def load_strategy_market_data(
     *,
     mode: str = "refresh_missing",
 ) -> dict[str, pd.Series]:
-    """Load strategy signals through one path for UI and automation."""
+    """Load strategy signals through one path for UI and automation.
+
+    Monthly rebalancing occurs on the first market session and uses the prior
+    session as its signal date. Therefore the latest market-data observation
+    needed for an end date in month M is month M-1. Requiring M itself would
+    fail during every live, still-incomplete month and could introduce a
+    future month-end observation into a mid-month backtest.
+    """
     result: dict[str, pd.Series] = {}
+    requested_start = pd.Timestamp(start_iso).to_period("M").to_timestamp("M")
+    signal_end = (
+        pd.Timestamp(end_iso).to_period("M") - 1
+    ).to_timestamp("M")
+    market_start = min(requested_start, signal_end)
+    market_start_iso = market_start.date().isoformat()
+    signal_end_iso = signal_end.date().isoformat()
     spread_ids: set[str] = set()
     if "장단기 금리차 역전 (10년-2년)" in signals:
         spread_ids.add("T10Y2Y")
     if "장단기 금리차 역전 (10년-3개월)" in signals:
         spread_ids.add("T10Y3M")
-    result.update(load_treasury_spreads(spread_ids, start_iso, end_iso, mode=mode))
+    result.update(
+        load_treasury_spreads(
+            spread_ids, market_start_iso, signal_end_iso, mode=mode,
+        )
+    )
     if "S&P500 배당수익률" in signals:
-        requested_start = pd.Timestamp(start_iso).to_period("M").to_timestamp("M")
         calibration_start = requested_start - pd.DateOffset(months=48)
         multpl = load_sp500_dividend_yield(
-            calibration_start.date().isoformat(), end_iso, mode=mode,
+            calibration_start.date().isoformat(), signal_end_iso, mode=mode,
         )
         try:
             spy = load_spy_distribution_yield(
-                calibration_start.date().isoformat(), end_iso, mode=mode,
+                calibration_start.date().isoformat(), signal_end_iso, mode=mode,
             )
             dividend = correct_estimated_sp500_dividend_yield(multpl, spy)
         except (ValueError, OSError, RuntimeError) as error:
@@ -189,7 +206,7 @@ def load_strategy_market_data(
                 "corrected_months": [],
                 "fallback_estimate_months": list(multpl.attrs.get("estimate_months", [])),
             })
-        result["SP500_DIV_YIELD"] = dividend.loc[requested_start:]
+        result["SP500_DIV_YIELD"] = dividend.loc[market_start:]
         result["SP500_DIV_YIELD"].attrs.update(dict(dividend.attrs))
     return result
 

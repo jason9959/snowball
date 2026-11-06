@@ -1,10 +1,11 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import pandas as pd
 
-from snowball.data.market_data import load_treasury_spreads
+from snowball.data.market_data import load_strategy_market_data, load_treasury_spreads
 
 
 class _Response:
@@ -18,6 +19,52 @@ class _Response:
 
 
 class MarketDataTests(unittest.TestCase):
+    def test_strategy_loader_only_requires_prior_completed_month(self):
+        captured: dict[str, str] = {}
+
+        def fake_spreads(series_ids, start_iso, end_iso, *, mode):
+            captured.update({"start": start_iso, "end": end_iso, "mode": mode})
+            return {
+                "T10Y3M": pd.Series(
+                    [0.78], index=pd.to_datetime(["2026-10-31"]), name="T10Y3M",
+                )
+            }
+
+        with patch(
+            "snowball.data.market_data.load_treasury_spreads",
+            side_effect=fake_spreads,
+        ):
+            result = load_strategy_market_data(
+                ("장단기 금리차 역전 (10년-3개월)",),
+                "2010-01-01", "2026-11-06", mode="fixed",
+            )
+        self.assertEqual(captured["end"], "2026-10-31")
+        self.assertEqual(captured["mode"], "fixed")
+        self.assertEqual(result["T10Y3M"].iloc[-1], 0.78)
+
+    def test_single_month_strategy_uses_prior_month_dividend_observation(self):
+        dividend = pd.Series(
+            [1.4], index=pd.to_datetime(["2026-10-31"]), name="SP500_DIV_YIELD",
+        )
+        dividend.attrs["estimate_months"] = []
+        with (
+            patch(
+                "snowball.data.market_data.load_sp500_dividend_yield",
+                return_value=dividend,
+            ) as multpl,
+            patch(
+                "snowball.data.market_data.load_spy_distribution_yield",
+                side_effect=ValueError("test fallback"),
+            ),
+        ):
+            result = load_strategy_market_data(
+                ("S&P500 배당수익률",),
+                "2026-11-01", "2026-11-06", mode="fixed",
+            )
+        self.assertEqual(multpl.call_args.args[1], "2026-10-31")
+        self.assertEqual(result["SP500_DIV_YIELD"].index[-1], pd.Timestamp("2026-10-31"))
+        self.assertEqual(result["SP500_DIV_YIELD"].iloc[-1], 1.4)
+
     def test_packaged_months_do_not_call_network(self):
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
             packaged = Path(directory) / "packaged.csv"
