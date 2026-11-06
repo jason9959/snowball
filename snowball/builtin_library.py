@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 from dataclasses import dataclass
 from typing import Callable
 
@@ -50,6 +51,27 @@ BUILTIN_PRESET_SPECS: dict[str, BuiltinPresetSpec] = {
         BuiltinPresetSpec("10. 프리셋 1 + 9 결합", _P1, _P9, 0.5),
     )
 }
+
+
+def _attach_data_snapshot(
+    result: dict,
+    bundle: PriceBundle,
+    market: dict[str, pd.Series],
+    market_data_mode: str,
+) -> None:
+    price_hash = hashlib.sha256(
+        pd.util.hash_pandas_object(bundle.adjusted_close, index=True).values.tobytes()
+        + pd.util.hash_pandas_object(bundle.adjusted_open, index=True).values.tobytes()
+    ).hexdigest()[:12]
+    result["data_snapshot"] = {
+        "price_source": bundle.source,
+        "price_snapshot_id": f"yahoo-{price_hash}",
+        "market_data_mode": market_data_mode,
+        "market_snapshots": {
+            name: series.attrs.get("snapshot_id", "-") for name, series in market.items()
+        },
+        "created_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+    }
 
 
 def get_builtin_spec(title: str) -> BuiltinPresetSpec:
@@ -118,31 +140,30 @@ def run_builtin_backtest(
                 transaction_cost_rate=transaction_cost_rate,
             )
             result["preset_name"] = spec.title
+        _attach_data_snapshot(result, execution_bundle, market, market_data_mode)
         return result, execution_bundle
 
     if spec.secondary is None:
-        return (
-            run_preset(
-                spec.primary, signal_bundle, market, start_date, end_date,
-                initial_investment=initial_investment,
-                transaction_cost_rate=transaction_cost_rate,
-            ),
-            signal_bundle,
+        result = run_preset(
+            spec.primary, signal_bundle, market, start_date, end_date,
+            initial_investment=initial_investment,
+            transaction_cost_rate=transaction_cost_rate,
         )
+        _attach_data_snapshot(result, signal_bundle, market, market_data_mode)
+        return result, signal_bundle
     second_label = (
         "프리셋 7" if spec.secondary.name == _P7.name
         else "프리셋 9" if spec.secondary.name == _P9.name
         else "프리셋 2"
     )
-    return (
-        run_blended_presets(
-            spec.primary, spec.secondary, weight, signal_bundle, market,
-            start_date, end_date, initial_investment=initial_investment,
-            transaction_cost_rate=transaction_cost_rate,
-            preset_name=spec.title, second_label=second_label,
-        ),
-        signal_bundle,
+    result = run_blended_presets(
+        spec.primary, spec.secondary, weight, signal_bundle, market,
+        start_date, end_date, initial_investment=initial_investment,
+        transaction_cost_rate=transaction_cost_rate,
+        preset_name=spec.title, second_label=second_label,
     )
+    _attach_data_snapshot(result, signal_bundle, market, market_data_mode)
+    return result, signal_bundle
 
 
 def run_user_backtest(
@@ -176,6 +197,7 @@ def run_user_backtest(
             transaction_cost_rate=transaction_cost_rate,
         )
         result["preset_name"] = record.title
+        _attach_data_snapshot(result, signal_bundle, market, market_data_mode)
         return result, signal_bundle
 
     execution_us = tuple(dict.fromkeys(
@@ -189,4 +211,5 @@ def run_user_backtest(
         start_date, end_date, initial_investment=initial_investment,
         transaction_cost_rate=transaction_cost_rate, preset_name=record.title,
     )
+    _attach_data_snapshot(result, execution_bundle, market, market_data_mode)
     return result, execution_bundle

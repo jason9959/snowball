@@ -66,6 +66,8 @@ class BuiltinLibraryTests(unittest.TestCase):
         )
         self.assertEqual(captured["signal_end"], "2011-11-30")
         self.assertEqual(result["preset_name"], "3. 프리셋 결합")
+        self.assertEqual(result["data_snapshot"]["price_source"], "synthetic")
+        self.assertTrue(result["data_snapshot"]["price_snapshot_id"].startswith("yahoo-"))
         self.assertFalse(result["nav"].empty)
 
     def test_user_preset_runs_with_same_market_data_boundary(self):
@@ -96,6 +98,7 @@ class BuiltinLibraryTests(unittest.TestCase):
         )
         self.assertEqual(captured["signal_end"], "2011-11-30")
         self.assertEqual(result["preset_name"], "나의 방어 전략")
+        self.assertEqual(result["data_snapshot"]["market_data_mode"], "fixed")
         self.assertIs(returned_bundle, bundle)
         self.assertFalse(result["nav"].empty)
 

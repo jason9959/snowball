@@ -1,8 +1,9 @@
 """Portable user-created strategy presets.
 
-The Streamlit session owns the active library. This module keeps its JSON
-format independent from the UI so an exported library can be validated and
-restored after a refresh, redeploy, or move to another device.
+Each frontend owns its active library (Streamlit session or NiceGUI browser
+storage). This module keeps the JSON format independent from the UI so an
+exported library can be validated and restored after a refresh, redeploy, or
+move to another device.
 """
 
 from __future__ import annotations
