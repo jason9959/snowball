@@ -134,6 +134,18 @@ class AccountStoreTest(unittest.TestCase):
         self.assertEqual(loaded[0]["입력시각"], "2026-11-01 23:00:01")
         self.assertEqual(spreadsheet.worksheet("계좌_일반계좌1").row_values(1), list(TRADE_COLUMNS))
 
+    def test_readonly_load_does_not_upgrade_legacy_header_or_timestamp(self):
+        original_time = "2026-11-01T23:00:01+09:00"
+        row = ["id1", original_time] + [""] * 12 + ["정상"]
+        worksheet = FakeWorksheet(
+            "계좌_일반계좌1", [list(LEGACY_TRADE_COLUMNS), row],
+        )
+        store = GoogleSheetAccountStore(FakeSpreadsheet([worksheet]))
+        loaded = store.load_transactions_readonly("계좌_일반계좌1")
+        self.assertEqual(loaded[0]["입력시각"], original_time)
+        self.assertEqual(loaded[0]["수정시각"], "")
+        self.assertEqual(worksheet.row_values(1), list(LEGACY_TRADE_COLUMNS))
+
     def test_create_append_update_and_cancel_transaction(self):
         spreadsheet = FakeSpreadsheet()
         store = GoogleSheetAccountStore(spreadsheet)

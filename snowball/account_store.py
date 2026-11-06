@@ -136,6 +136,37 @@ class GoogleSheetAccountStore:
         )
         return [{column: row.get(column, "") for column in TRADE_COLUMNS} for row in rows]
 
+    def load_transactions_readonly(self, account_tab: str) -> list[dict[str, Any]]:
+        """Read an account ledger without creating or normalizing any cells."""
+        if not account_tab.startswith(ACCOUNT_PREFIX):
+            raise ValueError("계좌 탭 이름은 '계좌_'로 시작해야 합니다.")
+        if account_tab not in self.list_account_tabs(ensure=False):
+            raise ValueError("선택한 계좌 탭을 찾을 수 없습니다.")
+        worksheet = self.spreadsheet.worksheet(account_tab)
+        first_row = tuple(str(value).strip() for value in worksheet.row_values(1))
+        if first_row == TRADE_COLUMNS:
+            rows = worksheet.get_all_records(
+                expected_headers=list(TRADE_COLUMNS), default_blank="",
+            )
+            return [
+                {column: row.get(column, "") for column in TRADE_COLUMNS}
+                for row in rows
+            ]
+        if first_row == LEGACY_TRADE_COLUMNS:
+            rows = worksheet.get_all_records(
+                expected_headers=list(LEGACY_TRADE_COLUMNS), default_blank="",
+            )
+            return [
+                {
+                    **{column: row.get(column, "") for column in LEGACY_TRADE_COLUMNS},
+                    "수정시각": "",
+                }
+                for row in rows
+            ]
+        raise SheetSchemaError(
+            f"'{account_tab}' 탭의 첫 행이 예상 헤더와 다릅니다."
+        )
+
     def append_transaction(self, account_tab: str, record: Mapping[str, Any]) -> None:
         worksheet = self._account_worksheet(account_tab)
         transaction_id = str(record.get("거래ID", ""))

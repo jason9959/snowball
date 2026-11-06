@@ -43,8 +43,10 @@ python nicegui_app.py
 - `GOOGLE_SERVICE_ACCOUNT_JSON`
 - `NICEGUI_STORAGE_SECRET` (배포 시 임의의 긴 문자열)
 
-현재 1단계에서는 메인 메뉴와 `계좌_` 탭 목록을 지원합니다. 계좌 성과
-대시보드와 백테스트 화면을 순서대로 이전합니다.
+현재 2단계에서는 메인 메뉴, `계좌_` 탭 목록과 읽기 전용 계좌 성과
+대시보드를 지원합니다. 총평가액·현금·손익·TWR·MDD, 평가액 및 입출금
+그래프, 보유종목과 투자이력을 확인할 수 있습니다. 백테스트 화면은 다음
+단계에서 이전합니다.
 
 Streamlit Cloud의 메인 파일 경로는 `streamlit_app.py`입니다.
 배포 의존성은 `requirements.txt`에 명시되어 있으며, `pyproject.toml`은
