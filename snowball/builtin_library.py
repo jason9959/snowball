@@ -18,6 +18,7 @@ from .service import (
     run_domestic_preset,
     run_preset,
 )
+from .user_presets import UserPreset
 
 
 @dataclass(frozen=True)
@@ -142,3 +143,50 @@ def run_builtin_backtest(
         ),
         signal_bundle,
     )
+
+
+def run_user_backtest(
+    record: UserPreset,
+    start_date: dt.date,
+    end_date: dt.date,
+    *,
+    initial_investment: float,
+    transaction_cost_rate: float = 0.0,
+    market_data_mode: str = "fixed",
+    price_loader: Callable[[tuple[str, ...], pd.Timestamp, pd.Timestamp], PriceBundle] = download_yahoo_prices,
+    market_loader: Callable[..., dict[str, pd.Series]] = load_strategy_market_data,
+) -> tuple[dict, PriceBundle]:
+    """Run one portable user preset through the same engine as built-ins."""
+    record.validate()
+    if start_date >= end_date:
+        raise ValueError("시작일은 종료일보다 앞서야 합니다.")
+    warmup = pd.Timestamp(start_date) - pd.DateOffset(months=18)
+    symbols = tuple(dict.fromkeys(record.strategy.symbols + ("QQQ",)))
+    signal_bundle = price_loader(symbols, warmup, pd.Timestamp(end_date))
+    signal_end = (pd.Timestamp(end_date).to_period("M") - 1).to_timestamp("M")
+    market = market_loader(
+        record.strategy.market_signals,
+        warmup.date().isoformat(), end_date.isoformat(), mode=market_data_mode,
+        signal_end_iso=signal_end.date().isoformat(),
+    )
+    if not record.domestic_execution:
+        result = run_preset(
+            record.strategy, signal_bundle, market, start_date, end_date,
+            initial_investment=initial_investment,
+            transaction_cost_rate=transaction_cost_rate,
+        )
+        result["preset_name"] = record.title
+        return result, signal_bundle
+
+    execution_us = tuple(dict.fromkeys(
+        record.strategy.attack_tickers + record.strategy.defense_tickers + ("QQQ",)
+    ))
+    execution_bundle = price_loader(
+        domestic_symbols(execution_us), warmup, pd.Timestamp(end_date),
+    )
+    result = run_domestic_preset(
+        record.strategy, signal_bundle, execution_bundle, market,
+        start_date, end_date, initial_investment=initial_investment,
+        transaction_cost_rate=transaction_cost_rate, preset_name=record.title,
+    )
+    return result, execution_bundle

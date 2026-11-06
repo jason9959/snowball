@@ -8,8 +8,10 @@ from snowball.builtin_library import (
     BUILTIN_PRESET_SPECS,
     get_builtin_spec,
     run_builtin_backtest,
+    run_user_backtest,
 )
 from snowball.data.prices import PriceBundle
+from snowball.user_presets import UserPreset
 
 
 class BuiltinLibraryTests(unittest.TestCase):
@@ -64,6 +66,37 @@ class BuiltinLibraryTests(unittest.TestCase):
         )
         self.assertEqual(captured["signal_end"], "2011-11-30")
         self.assertEqual(result["preset_name"], "3. 프리셋 결합")
+        self.assertFalse(result["nav"].empty)
+
+    def test_user_preset_runs_with_same_market_data_boundary(self):
+        strategy = get_builtin_spec("1. 분산투자 방어형").primary
+        record = UserPreset("나의 방어 전략", strategy)
+        symbols = tuple(dict.fromkeys(strategy.symbols + ("QQQ",)))
+        index = pd.bdate_range("2008-01-01", "2012-12-31")
+        prices = pd.DataFrame({
+            symbol: 100.0 * np.exp(np.arange(len(index)) * (0.0001 + offset * 0.000001))
+            for offset, symbol in enumerate(symbols)
+        }, index=index)
+        bundle = PriceBundle(prices, prices.copy(), source="synthetic")
+        captured: dict[str, str] = {}
+
+        def market_loader(signals, start_iso, end_iso, *, mode, signal_end_iso):
+            captured["signal_end"] = signal_end_iso
+            monthly = pd.date_range("2007-01-31", "2012-12-31", freq="ME")
+            return {
+                "SP500_DIV_YIELD": pd.Series(5.0, index=monthly),
+                "T10Y3M": pd.Series(1.0, index=monthly),
+            }
+
+        result, returned_bundle = run_user_backtest(
+            record, dt.date(2010, 1, 1), dt.date(2011, 12, 31),
+            initial_investment=10_000,
+            price_loader=lambda symbols, start, end: bundle,
+            market_loader=market_loader,
+        )
+        self.assertEqual(captured["signal_end"], "2011-11-30")
+        self.assertEqual(result["preset_name"], "나의 방어 전략")
+        self.assertIs(returned_bundle, bundle)
         self.assertFalse(result["nav"].empty)
 
 
