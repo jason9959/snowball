@@ -22,6 +22,7 @@ from snowball.account_dashboard import (
     build_account_dashboard,
 )
 from snowball.accounting import download_unadjusted_closes, required_price_symbols
+from snowball.builtin_library import BUILTIN_PRESET_SPECS, get_builtin_spec, run_builtin_backtest
 from snowball.settings import google_sheet_settings
 
 
@@ -160,7 +161,7 @@ def home_page() -> None:
             _feature_card(
                 "query_stats", "백테스팅",
                 "동적자산배분 조건을 구성하고 장기 성과와 리밸런싱 이력을 검증합니다.",
-                "백테스팅 열기", "/backtest", enabled=False,
+                "백테스팅 열기", "/backtest",
             )
             _feature_card(
                 "account_balance_wallet", "투자 계좌 현황",
@@ -169,8 +170,8 @@ def home_page() -> None:
             )
         with ui.card().classes("migration-note w-full"):
             ui.label("개편 진행 상황").classes("font-bold")
-            ui.label("2단계 · 읽기 전용 계좌 대시보드 구성 완료")
-            ui.linear_progress(value=0.50).props("rounded color=primary")
+            ui.label("3-1단계 · 기본 프리셋 백테스트 연결")
+            ui.linear_progress(value=0.75).props("rounded color=primary")
 
 
 @ui.page("/accounts")
@@ -505,16 +506,166 @@ async def account_dashboard_page(account_tab: str) -> None:
         await render()
 
 
+def _render_backtest_result(result: dict, bundle) -> None:
+    metrics = result["metrics"]
+    metric_values = (
+        ("누적 수익률", _percent(metrics.get("total_return"))),
+        ("연환산 수익률", _percent(metrics.get("cagr"))),
+        ("연 변동성", _percent(metrics.get("annual_volatility"))),
+        ("최대 낙폭", _percent(metrics.get("max_drawdown"))),
+        ("연 수익률 표준편차", _percent(metrics.get("annual_return_std"))),
+        ("최악의 해", _percent(metrics.get("worst_year"))),
+    )
+    ui.label(f"{result['preset_name']} 결과").classes("section-title")
+    ui.label(
+        f"공통 평가기간 · {pd.Timestamp(result['common_start']).date()} ~ "
+        f"{pd.Timestamp(result['common_end']).date()}"
+    ).classes("text-sm text-grey-6")
+    with ui.grid(columns=3).classes("result-metric-grid w-full gap-3"):
+        for label, value in metric_values:
+            _metric_card(label, value)
+
+    nav = result["nav"].dropna().astype(float)
+    chart = pd.DataFrame({"포트폴리오": nav})
+    benchmark = result.get("benchmark_ticker", "QQQ")
+    if benchmark in bundle.adjusted_close:
+        comparison = bundle.adjusted_close[benchmark].reindex(nav.index).ffill().dropna()
+        if not comparison.empty:
+            comparison = comparison / comparison.iloc[0]
+            chart["국내 나스닥100" if benchmark.endswith(".KS") else "QQQ"] = comparison
+    dates = [value.strftime("%Y-%m-%d") for value in chart.index]
+    series = [
+        {
+            "name": column, "type": "line", "showSymbol": False,
+            "data": chart[column].round(5).tolist(),
+            "lineStyle": {"width": 3 if column == "포트폴리오" else 2},
+        }
+        for column in chart.columns
+    ]
+    with ui.tabs().classes("w-full dashboard-tabs") as tabs:
+        returns_tab = ui.tab("수익률 차트", icon="show_chart")
+        drawdown_tab = ui.tab("손실폭", icon="trending_down")
+        history_tab = ui.tab("리밸런싱", icon="event_repeat")
+    with ui.tab_panels(tabs, value=returns_tab).classes("w-full dashboard-panels"):
+        with ui.tab_panel(returns_tab):
+            ui.echart({
+                "tooltip": {"trigger": "axis"},
+                "legend": {"bottom": 0, "data": list(chart.columns)},
+                "grid": {"left": 54, "right": 24, "top": 24, "bottom": 58},
+                "xAxis": {"type": "category", "data": dates, "axisLabel": {"hideOverlap": True}},
+                "yAxis": {"type": "value", "scale": True},
+                "dataZoom": [{"type": "inside"}], "series": series,
+            }).classes("dashboard-chart w-full")
+        with ui.tab_panel(drawdown_tab):
+            drawdown = result["drawdown"].reindex(nav.index).fillna(0.0) * 100
+            ui.echart({
+                "tooltip": {"trigger": "axis"},
+                "grid": {"left": 54, "right": 24, "top": 24, "bottom": 48},
+                "xAxis": {"type": "category", "data": dates, "axisLabel": {"hideOverlap": True}},
+                "yAxis": {"type": "value", "axisLabel": {"formatter": "{value}%"}},
+                "dataZoom": [{"type": "inside"}],
+                "series": [{
+                    "name": "손실폭", "type": "line", "showSymbol": False,
+                    "data": drawdown.round(3).tolist(), "areaStyle": {"opacity": .18},
+                }],
+            }).classes("dashboard-chart w-full")
+        with ui.tab_panel(history_tab):
+            history = result["history"].copy()
+            display = [
+                column for column in (
+                    "적용일", "판단 기준일", "선택된 종목", "턴오버", "거래비용", "평가금액"
+                ) if column in history
+            ]
+            table = history[display].sort_values("적용일", ascending=False).copy()
+            for column in table.columns:
+                table[column] = table[column].astype(str)
+            ui.table(
+                columns=_table_columns(display), rows=table.to_dict("records"),
+                pagination={"rowsPerPage": 12},
+            ).props("flat bordered dense").classes("w-full account-table")
+
+
 @ui.page("/backtest")
 def backtest_page() -> None:
     _shell()
     with ui.column().classes("page-container w-full gap-4"):
         ui.label("백테스팅").classes("page-title")
-        ui.label("기존 Streamlit 백테스트는 정상 운영 중입니다.").classes("page-subtitle")
-        with ui.card().classes("migration-note w-full"):
-            ui.icon("construction").classes("text-4xl text-primary")
-            ui.label("백테스트 화면은 계좌 대시보드 다음에 이전합니다.").classes("font-bold")
-            ui.button("홈으로", on_click=lambda: ui.navigate.to("/")).props("outline")
+        ui.label("기본 제공 프리셋 1~10을 같은 계산 엔진으로 검증합니다.").classes("page-subtitle")
+        with ui.card().classes("backtest-controls w-full"):
+            preset = ui.select(
+                list(BUILTIN_PRESET_SPECS), value=next(iter(BUILTIN_PRESET_SPECS)),
+                label="내 프리셋",
+            ).props("outlined options-dense").classes("w-full")
+            with ui.row().classes("w-full gap-3"):
+                start_input = ui.input("시작일", value="2010-01-01").props(
+                    "type=date"
+                ).classes("date-input")
+                end_input = ui.input(
+                    "종료일", value=datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat(),
+                ).props("type=date").classes("date-input")
+            with ui.row().classes("w-full gap-3"):
+                initial = ui.number(
+                    "초기 투자금", value=10_000, min=100, step=1_000,
+                ).props("outlined").classes("control-grow")
+                cost = ui.number(
+                    "편도 거래비용(bp)", value=0, min=0, max=500, step=1,
+                ).props("outlined").classes("control-grow")
+                weight = ui.number(
+                    "프리셋 1 비중(%)", value=50, min=0, max=100, step=5,
+                ).props("outlined").classes("control-grow")
+            market_mode = ui.radio(
+                {"fixed": "고정 스냅샷", "latest": "최신 데이터"},
+                value="fixed",
+            ).props("inline")
+            run_button = ui.button("백테스트 실행", icon="play_arrow").classes(
+                "primary-action w-full"
+            )
+
+        status = ui.label("조건을 확인한 뒤 실행하세요.").classes("status-text")
+        result_area = ui.column().classes("w-full gap-4")
+
+        def update_preset_controls() -> None:
+            spec = get_builtin_spec(str(preset.value))
+            weight.set_visibility(spec.secondary is not None)
+            initial.value = 10_000_000 if spec.domestic_execution else 10_000
+            initial.min = 100_000 if spec.domestic_execution else 100
+            initial.update()
+
+        preset.on_value_change(lambda _: update_preset_controls())
+        update_preset_controls()
+
+        async def execute_backtest() -> None:
+            run_button.disable()
+            result_area.clear()
+            status.set_text("가격과 시장 데이터를 불러와 계산하고 있습니다…")
+            try:
+                title = str(preset.value)
+                spec = get_builtin_spec(title)
+                result, bundle = await run.io_bound(
+                    run_builtin_backtest,
+                    title,
+                    date.fromisoformat(str(start_input.value)),
+                    date.fromisoformat(str(end_input.value)),
+                    initial_investment=float(initial.value or 0),
+                    transaction_cost_rate=float(cost.value or 0) / 10_000.0,
+                    market_data_mode=str(market_mode.value),
+                    primary_weight=(
+                        float(weight.value or 0) / 100.0 if spec.secondary else None
+                    ),
+                )
+            except Exception as error:
+                status.set_text("백테스트를 완료하지 못했습니다.")
+                with result_area:
+                    with ui.card().classes("error-card w-full"):
+                        ui.label(str(error)).classes("text-negative")
+            else:
+                status.set_text("백테스트가 완료되었습니다.")
+                with result_area:
+                    _render_backtest_result(result, bundle)
+            finally:
+                run_button.enable()
+
+        run_button.on("click", execute_backtest)
 
 
 ui.add_css(
@@ -551,6 +702,10 @@ ui.add_css(
       box-shadow: 0 8px 26px rgba(32,47,79,.05); }
     .dashboard-chart { height: 430px; }
     .account-table { max-width: 100%; overflow-x: auto; }
+    .backtest-controls { border-radius: 20px; border: 1px solid #e8ebf2;
+      box-shadow: 0 8px 26px rgba(32,47,79,.06); padding: 22px; gap: 16px; }
+    .control-grow { min-width: 180px; flex: 1; }
+    .result-metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
     @media (max-width: 700px) {
       .feature-grid { grid-template-columns: 1fr !important; }
       .page-container { padding: 82px 14px 28px; }
@@ -561,6 +716,8 @@ ui.add_css(
       .metric-value { font-size: 1.05rem; }
       .date-input { min-width: calc(50% - 8px); flex: 1; }
       .dashboard-chart { height: 360px; }
+      .result-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+      .control-grow { min-width: 100%; }
     }
     """
 )
