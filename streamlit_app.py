@@ -72,6 +72,18 @@ DOMESTIC_PRESET_NAMES = {
     DOMESTIC_PRESET_1, DOMESTIC_PRESET_2, DOMESTIC_COMBINED_PRESET_NAME,
 }
 USER_PRESET_PREFIX = "사용자::"
+BUILTIN_PRESET_NAMES = (
+    PRESET_NAMES[0],
+    PRESET_NAMES[1],
+    COMBINED_PRESET_NAME,
+    DOMESTIC_PRESET_1,
+    DOMESTIC_PRESET_2,
+    DOMESTIC_COMBINED_PRESET_NAME,
+    PRESET_7_NAME,
+    ALTERNATIVE_COMBINED_PRESET_NAME,
+    PRESET_9_NAME,
+    OPTIMIZED_COMBINED_PRESET_NAME,
+)
 MOMENTUM_KINDS = ("수익률", "이동평균", "모멘텀 스코어")
 SCORE_TYPES = (
     "1-3-6개월 단순", "3-6-12개월 단순", "1-3-6-12개월 단순",
@@ -1288,13 +1300,19 @@ def _user_preset_key(title: str) -> str:
 
 def _user_preset_manager() -> None:
     library = _user_presets()
-    with st.expander("내 프리셋 관리", expanded=bool(library)):
+    with st.expander("프리셋 가져오기·백업", expanded=False):
         uploaded = st.file_uploader("프리셋 JSON 불러오기", type=("json",), key="user_preset_upload")
         if uploaded is not None:
             digest = hashlib.sha256(uploaded.getvalue()).hexdigest()
             if digest != st.session_state.get("imported_user_preset_digest"):
                 try:
                     imported = import_user_presets(uploaded.getvalue())
+                    reserved = [record.title for record in imported if record.title in BUILTIN_PRESET_NAMES]
+                    if reserved:
+                        raise ValueError(
+                            "기본 제공 프리셋과 같은 제목은 가져올 수 없습니다: "
+                            + ", ".join(reserved)
+                        )
                     for record in imported:
                         library[record.title] = record
                     st.session_state.imported_user_preset_digest = digest
@@ -1303,84 +1321,60 @@ def _user_preset_manager() -> None:
                 except ValueError as error:
                     st.error(str(error))
         if library:
-            titles = sorted(library)
-            selected = st.selectbox("저장된 프리셋", titles, key="managed_user_preset")
-            left, right = st.columns(2)
-            if left.button("선택 프리셋 불러오기", use_container_width=True):
-                st.session_state.preset_name = _user_preset_key(selected)
-                st.session_state.form_version = st.session_state.get("form_version", 0) + 1
-                st.rerun()
-            if right.button("선택 프리셋 삭제", use_container_width=True):
-                del library[selected]
-                if st.session_state.get("preset_name") == _user_preset_key(selected):
-                    st.session_state.preset_name = PRESET_NAMES[0]
-                st.session_state.user_preset_notice = f"‘{selected}’ 프리셋을 삭제했습니다."
-                st.rerun()
             st.download_button(
-                "내 프리셋 전체 JSON 다운로드",
+                "직접 만든 프리셋 JSON 다운로드",
                 export_user_presets(library.values()),
                 file_name="snowball_user_presets.json",
                 mime="application/json",
                 use_container_width=True,
             )
-            st.caption("새로고침·재배포·다른 기기에서 복구하려면 이 JSON을 보관한 뒤 다시 불러오세요.")
+            st.caption(
+                f"직접 만든 프리셋 {len(library)}개 · 기본 제공 프리셋은 앱에 항상 포함되므로 "
+                "별도로 백업하지 않습니다."
+            )
         else:
-            st.caption("아직 저장된 내 프리셋이 없습니다. 아래에서 조건을 만든 뒤 제목과 함께 저장하세요.")
+            st.caption("직접 만든 프리셋이 생기면 이곳에서 JSON으로 백업할 수 있습니다.")
 
 
 def _preset_buttons() -> str:
-    st.subheader("연구 포트폴리오 불러오기")
-    left, center, right = st.columns(3)
-    if left.button("1. 분산투자 방어형", use_container_width=True, type="primary" if st.session_state.get("preset_name", PRESET_NAMES[0]) == PRESET_NAMES[0] else "secondary"):
-        st.session_state.preset_name = PRESET_NAMES[0]
+    st.subheader("내 프리셋")
+    library = _user_presets()
+    options = list(BUILTIN_PRESET_NAMES) + [
+        _user_preset_key(title) for title in sorted(library)
+    ]
+    current = st.session_state.get("preset_name", PRESET_NAMES[0])
+    if current not in options:
+        current = PRESET_NAMES[0]
+        st.session_state.preset_name = current
+
+    selected = st.selectbox(
+        "프리셋 선택",
+        options,
+        index=options.index(current),
+        format_func=lambda value: value.removeprefix(USER_PRESET_PREFIX),
+        key=f"preset_library_select::{current}::{len(options)}",
+    )
+    if selected != current:
+        st.session_state.preset_name = selected
         st.session_state.form_version = st.session_state.get("form_version", 0) + 1
         st.rerun()
-    if center.button("2. 집중투자 공격형", use_container_width=True, type="primary" if st.session_state.get("preset_name", PRESET_NAMES[0]) == PRESET_NAMES[1] else "secondary"):
-        st.session_state.preset_name = PRESET_NAMES[1]
-        st.session_state.form_version = st.session_state.get("form_version", 0) + 1
-        st.rerun()
-    if right.button("3. 프리셋 결합", use_container_width=True, type="primary" if st.session_state.get("preset_name", PRESET_NAMES[0]) == COMBINED_PRESET_NAME else "secondary"):
-        st.session_state.preset_name = COMBINED_PRESET_NAME
-        st.session_state.form_version = st.session_state.get("form_version", 0) + 1
-        st.rerun()
-    left, center, right = st.columns(3)
-    if left.button(DOMESTIC_PRESET_1, use_container_width=True, type="primary" if st.session_state.get("preset_name", PRESET_NAMES[0]) == DOMESTIC_PRESET_1 else "secondary"):
-        st.session_state.preset_name = DOMESTIC_PRESET_1
-        st.session_state.form_version = st.session_state.get("form_version", 0) + 1
-        st.rerun()
-    if center.button(DOMESTIC_PRESET_2, use_container_width=True, type="primary" if st.session_state.get("preset_name", PRESET_NAMES[0]) == DOMESTIC_PRESET_2 else "secondary"):
-        st.session_state.preset_name = DOMESTIC_PRESET_2
-        st.session_state.form_version = st.session_state.get("form_version", 0) + 1
-        st.rerun()
-    if right.button(DOMESTIC_COMBINED_PRESET_NAME, use_container_width=True, type="primary" if st.session_state.get("preset_name", PRESET_NAMES[0]) == DOMESTIC_COMBINED_PRESET_NAME else "secondary"):
-        st.session_state.preset_name = DOMESTIC_COMBINED_PRESET_NAME
-        st.session_state.form_version = st.session_state.get("form_version", 0) + 1
-        st.rerun()
-    left, right = st.columns(2)
-    if left.button(PRESET_7_NAME, use_container_width=True, type="primary" if st.session_state.get("preset_name", PRESET_NAMES[0]) == PRESET_7_NAME else "secondary"):
-        st.session_state.preset_name = PRESET_7_NAME
-        st.session_state.form_version = st.session_state.get("form_version", 0) + 1
-        st.rerun()
-    if right.button(ALTERNATIVE_COMBINED_PRESET_NAME, use_container_width=True, type="primary" if st.session_state.get("preset_name", PRESET_NAMES[0]) == ALTERNATIVE_COMBINED_PRESET_NAME else "secondary"):
-        st.session_state.preset_name = ALTERNATIVE_COMBINED_PRESET_NAME
-        st.session_state.form_version = st.session_state.get("form_version", 0) + 1
-        st.rerun()
-    left, right = st.columns(2)
-    if left.button(PRESET_9_NAME, use_container_width=True, type="primary" if st.session_state.get("preset_name", PRESET_NAMES[0]) == PRESET_9_NAME else "secondary"):
-        st.session_state.preset_name = PRESET_9_NAME
-        st.session_state.form_version = st.session_state.get("form_version", 0) + 1
-        st.rerun()
-    if right.button(OPTIMIZED_COMBINED_PRESET_NAME, use_container_width=True, type="primary" if st.session_state.get("preset_name", PRESET_NAMES[0]) == OPTIMIZED_COMBINED_PRESET_NAME else "secondary"):
-        st.session_state.preset_name = OPTIMIZED_COMBINED_PRESET_NAME
-        st.session_state.form_version = st.session_state.get("form_version", 0) + 1
-        st.rerun()
-    selected = st.session_state.get("preset_name", PRESET_NAMES[0])
-    st.caption("버튼을 누르면 아래 모든 전략 조건이 해당 연구 프리셋으로 초기화됩니다. 이후 필요한 항목만 바꿀 수 있습니다.")
+    if selected.startswith(USER_PRESET_PREFIX):
+        title = selected.removeprefix(USER_PRESET_PREFIX)
+        left, right = st.columns((3, 1))
+        left.caption("직접 저장한 프리셋입니다. 선택하면 아래 조건 편집 화면에 즉시 반영됩니다.")
+        if right.button("삭제", key=f"delete_user_preset_{title}", use_container_width=True):
+            library.pop(title, None)
+            st.session_state.preset_name = PRESET_NAMES[0]
+            st.session_state.form_version = st.session_state.get("form_version", 0) + 1
+            st.session_state.user_preset_notice = f"‘{title}’ 프리셋을 삭제했습니다."
+            st.rerun()
+    else:
+        st.caption("기본 제공 프리셋입니다. 제목과 계산 조건은 기존과 동일하게 유지됩니다.")
     _user_preset_manager()
     notice = st.session_state.pop("user_preset_notice", None)
     if notice:
         st.success(notice)
-    return selected
+    return st.session_state.get("preset_name", selected)
 
 
 def _save_user_preset_controls(edited: PortfolioPreset, domestic_execution: bool) -> None:
@@ -1396,6 +1390,9 @@ def _save_user_preset_controls(edited: PortfolioPreset, domestic_execution: bool
         if st.button("현재 조건을 프리셋으로 저장", use_container_width=True):
             if not title:
                 st.error("프리셋 제목을 입력해 주세요.")
+                return
+            if title in BUILTIN_PRESET_NAMES:
+                st.error("기본 제공 프리셋과 같은 제목은 사용할 수 없습니다.")
                 return
             try:
                 strategy = replace(edited, name=title)
@@ -1962,7 +1959,7 @@ def main() -> None:
     if st.button("← 기능 선택으로", key="backtest_home"):
         _go_to("home")
     st.title("❄️ Snowball Portfolio Lab")
-    st.write("연구 프리셋을 불러오거나 조건을 조정해 동적 포트폴리오를 검증합니다.")
+    st.write("내 프리셋을 선택하거나 조건을 조정해 동적 포트폴리오를 검증합니다.")
     restore_id = st.query_params.get("run_id")
     restored = _restore_run(restore_id)
     if restored is not None and "last_result" not in st.session_state:
