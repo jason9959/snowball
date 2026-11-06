@@ -7,6 +7,7 @@ import json
 import time
 from dataclasses import dataclass, replace
 from datetime import date, datetime
+from pathlib import Path
 from threading import Lock
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
@@ -31,7 +32,14 @@ from snowball.builtin_library import (
 )
 from snowball.core.catalog import US_ETFS
 from snowball.exports import diagnostic_frames, diagnostic_zip, market_data_export
+from snowball.mailing import (
+    RebalanceRecommendation,
+    first_xnys_session,
+    generate_recommendations,
+    load_mailing_portfolios,
+)
 from snowball.presets import MomentumSpec, SpreadRule
+from snowball.rebalance_compare import build_rebalance_comparison
 from snowball.settings import google_sheet_settings
 from snowball.user_presets import (
     UserPreset,
@@ -44,6 +52,7 @@ APP_TITLE = "Snowball Portfolio Lab"
 ACCOUNT_CACHE_SECONDS = 300
 TRANSACTION_CACHE_SECONDS = 60
 PRICE_CACHE_SECONDS = 900
+REBALANCE_CACHE_SECONDS = 3600
 
 
 @dataclass
@@ -58,6 +67,7 @@ _transaction_cache: dict[str, tuple[float, list[dict[str, object]]]] = {}
 _price_cache: dict[
     tuple[tuple[str, ...], str, str], tuple[float, pd.DataFrame, pd.Series]
 ] = {}
+_rebalance_cache: dict[str, tuple[float, RebalanceRecommendation]] = {}
 _data_cache_lock = Lock()
 
 
@@ -119,6 +129,36 @@ def _load_prices(
     with _data_cache_lock:
         _price_cache[key] = (now, closes, usdkrw)
     return closes, usdkrw
+
+
+def _rebalance_trade_date(as_of: date) -> date:
+    trade_date = first_xnys_session(as_of)
+    if trade_date <= as_of:
+        return trade_date
+    previous_month = (pd.Timestamp(as_of).replace(day=1) - pd.Timedelta(days=1)).date()
+    return first_xnys_session(previous_month)
+
+
+def _load_rebalance_recommendation(
+    as_of: date, force: bool = False,
+) -> RebalanceRecommendation:
+    trade_date = _rebalance_trade_date(as_of)
+    key = trade_date.isoformat()
+    now = time.monotonic()
+    with _data_cache_lock:
+        cached = _rebalance_cache.get(key)
+        if cached and not force and now - cached[0] < REBALANCE_CACHE_SECONDS:
+            return cached[1]
+    portfolios = load_mailing_portfolios(
+        Path(__file__).resolve().parent / "config" / "mailing.json"
+    )
+    recommendations = generate_recommendations(portfolios, trade_date)
+    if not recommendations:
+        raise ValueError("리밸런싱 목표를 계산하지 못했습니다.")
+    recommendation = recommendations[0]
+    with _data_cache_lock:
+        _rebalance_cache[key] = (time.monotonic(), recommendation)
+    return recommendation
 
 
 def _shell(active: str = "") -> None:
@@ -184,8 +224,8 @@ def home_page() -> None:
             )
         with ui.card().classes("migration-note w-full"):
             ui.label("개편 진행 상황").classes("font-bold")
-            ui.label("3-3단계 · 백테스트 검증자료 및 다운로드 연결")
-            ui.linear_progress(value=0.9).props("rounded color=primary")
+            ui.label("4단계 · 계좌 목표 대비 리밸런싱 연결")
+            ui.linear_progress(value=0.97).props("rounded color=primary")
 
 
 @ui.page("/accounts")
@@ -406,14 +446,92 @@ def _render_dashboard_content(account_tab: str, data: AccountDashboardData) -> N
             ).classes("text-xs text-grey-6")
         with ui.tab_panel(rebalance_tab):
             with ui.card().classes("migration-note w-full"):
-                ui.label("프리셋 3 월간 운용").classes("font-bold")
-                ui.label("프리셋 1 · 분산투자 방어형 50%")
-                ui.label("프리셋 2 · 집중투자 공격형 50%")
-                ui.label("운용 시작 · 2026-11-02 시가")
-                ui.label(f"선택 계좌 · {_account_name(account_tab)}")
-                ui.label("목표 비중과 실제 비중 비교는 다음 세부 단계에서 연결합니다.").classes(
-                    "text-xs text-grey-6"
-                )
+                ui.label("월간 목표 대비 현재 계좌").classes("font-bold")
+                ui.label(
+                    "메일링과 동일한 프리셋 3 계산을 필요한 경우에만 실행합니다. "
+                    "계좌 첫 화면과 다른 탭의 속도에는 영향을 주지 않습니다."
+                ).classes("text-sm text-grey-7")
+                with ui.row().classes("items-center gap-2"):
+                    target_button = ui.button(
+                        "목표 불러오기", icon="sync_alt",
+                    ).classes("primary-action")
+                    target_refresh = ui.button(icon="refresh").props("round outline").tooltip(
+                        "목표 데이터 강제 새로고침"
+                    )
+                target_status = ui.label(
+                    "버튼을 누르면 선택한 종료일이 속한 달의 목표와 비교합니다."
+                ).classes("status-text")
+                target_area = ui.column().classes("w-full gap-3")
+
+                async def render_rebalance(force: bool = False) -> None:
+                    target_button.disable()
+                    target_refresh.disable()
+                    target_status.set_text("메일링과 동일한 목표를 계산하고 있습니다…")
+                    target_area.clear()
+                    try:
+                        recommendation = await run.io_bound(
+                            _load_rebalance_recommendation, data.end_date, force,
+                        )
+                        comparison = await run.io_bound(
+                            build_rebalance_comparison,
+                            valuation.holdings,
+                            cash=valuation.cash,
+                            total_value=valuation.total_value,
+                            target_selection=recommendation.domestic_selection,
+                        )
+                    except Exception as error:
+                        target_status.set_text("리밸런싱 목표를 불러오지 못했습니다.")
+                        with target_area:
+                            ui.label(str(error)).classes("text-negative")
+                            ui.label(
+                                "미국·한국 거래일 데이터와 최신 시장자료를 확인해 주세요."
+                            ).classes("text-xs text-grey-6")
+                    else:
+                        target_status.set_text(
+                            f"1시간 캐시 · 판단 기준일 {recommendation.decision_date:%Y-%m-%d}"
+                        )
+                        with target_area:
+                            with ui.grid(columns=3).classes("rebalance-summary w-full gap-3"):
+                                _metric_card("미국 목표 매수일", f"{recommendation.trade_date:%Y-%m-%d}")
+                                _metric_card("국내 제안일", f"{recommendation.domestic_trade_date:%Y-%m-%d}")
+                                _metric_card("비교 계좌 평가액", _money(valuation.total_value))
+                            ui.label(recommendation.title).classes("font-bold")
+                            ui.label(
+                                f"미국 목표 · {recommendation.selection}"
+                            ).classes("text-sm text-grey-7")
+                            ui.label(
+                                f"국내 대체 목표 · {recommendation.domestic_selection}"
+                            ).classes("text-sm text-grey-7")
+                            display = comparison.copy()
+                            display["현재 평가금액"] = display["현재 평가금액"].map(_money)
+                            display["현재 비중"] = display["현재 비중"].map(lambda value: f"{value:.2%}")
+                            display["목표 비중"] = display["목표 비중"].map(lambda value: f"{value:.2%}")
+                            display["목표 평가금액"] = display["목표 평가금액"].map(_money)
+                            display["차이 금액"] = display["차이 금액"].map(
+                                lambda value: f"{value:+,.0f}원"
+                            )
+                            _result_table(display, 20)
+                            ui.label(
+                                "차이 금액은 현재 평가액을 목표 비중에 맞추기 위한 예상 금액입니다. "
+                                "수량은 실제 주문 시가가 확정된 뒤 계산해야 합니다."
+                            ).classes("text-xs text-grey-6")
+                            ui.button(
+                                "비교표 CSV", icon="download",
+                                on_click=lambda: ui.download.content(
+                                    comparison.to_csv(index=False).encode("utf-8-sig"),
+                                    filename=(
+                                        f"rebalance_{_account_name(account_tab)}_"
+                                        f"{recommendation.trade_date}.csv"
+                                    ),
+                                    media_type="text/csv",
+                                ),
+                            ).props("outline no-caps")
+                    finally:
+                        target_button.enable()
+                        target_refresh.enable()
+
+                target_button.on("click", lambda: render_rebalance(False))
+                target_refresh.on("click", lambda: render_rebalance(True))
 
 
 @ui.page("/accounts/{account_tab}")
@@ -1234,6 +1352,7 @@ ui.add_css(
     .snapshot-code { max-height: 420px; overflow: auto; border-radius: 12px; }
     .control-grow { min-width: 180px; flex: 1; }
     .result-metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
+    .rebalance-summary { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
     @media (max-width: 700px) {
       .feature-grid { grid-template-columns: 1fr !important; }
       .page-container { padding: 82px 14px 28px; }
@@ -1247,6 +1366,7 @@ ui.add_css(
       .editor-section { padding: 12px; }
       .dashboard-chart { height: 360px; }
       .result-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+      .rebalance-summary { grid-template-columns: 1fr !important; }
       .control-grow { min-width: 100%; }
     }
     """
