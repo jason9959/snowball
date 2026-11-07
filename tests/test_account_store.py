@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 
 from snowball.account_store import (
@@ -93,6 +94,22 @@ class AccountStoreTest(unittest.TestCase):
             '{"client_email":"bot@example.com","private_key":"secret","token_uri":"https://token"}'
         )
         self.assertEqual(parsed["client_email"], "bot@example.com")
+
+    def test_parse_service_account_json_accepts_streamlit_wrapper(self):
+        raw = (
+            "GOOGLE_SERVICE_ACCOUNT_JSON = '''"
+            '{"client_email":"bot@example.com","private_key":"secret",'
+            '"token_uri":"https://token"}'
+            "'''"
+        )
+        self.assertEqual(parse_service_account_json(raw)["private_key"], "secret")
+
+    def test_parse_service_account_json_accepts_encoded_json_string(self):
+        raw = json.dumps(
+            '{"client_email":"bot@example.com","private_key":"secret",'
+            '"token_uri":"https://token"}'
+        )
+        self.assertEqual(parse_service_account_json(raw)["token_uri"], "https://token")
 
     def test_ensure_schema_creates_system_and_default_account_tabs(self):
         spreadsheet = FakeSpreadsheet()

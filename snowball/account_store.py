@@ -39,8 +39,20 @@ class SheetSchemaError(ValueError):
 def parse_service_account_json(raw: str | Mapping[str, Any]) -> dict[str, Any]:
     """Return a validated service-account mapping without logging secrets."""
     if isinstance(raw, str):
+        text = raw.strip()
+        assignment = re.match(r"^GOOGLE_SERVICE_ACCOUNT_JSON\s*=\s*(.+)$", text, re.DOTALL)
+        if assignment:
+            text = assignment.group(1).strip()
+        for quote in ("'''", '\"\"\"'):
+            if text.startswith(quote) and text.endswith(quote):
+                text = text[len(quote):-len(quote)].strip()
+                break
         try:
-            value = json.loads(raw)
+            value = json.loads(text)
+            # Render users sometimes paste a JSON-encoded JSON string. Decode
+            # the harmless outer layer while keeping the secret out of logs.
+            if isinstance(value, str):
+                value = json.loads(value)
         except json.JSONDecodeError as error:
             raise ValueError("Google 서비스 계정 JSON 형식을 확인하세요.") from error
     elif isinstance(raw, Mapping):
