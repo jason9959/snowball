@@ -706,7 +706,7 @@ class _StrategyEditor:
                 assets, value=list(self.base.attack_tickers), label="투자자산 후보군",
                 multiple=True,
             ).props("outlined use-chips options-dense").classes("w-full")
-            with ui.row().classes("w-full gap-3"):
+            with ui.row().classes("editor-fields w-full"):
                 self.attack_mode = ui.select(
                     ATTACK_MODES, value=self.base.attack_mode, label="선택 방식",
                 ).props("outlined").classes("control-grow")
@@ -722,7 +722,7 @@ class _StrategyEditor:
                 assets, value=list(self.base.defense_tickers), label="방어자산 후보군",
                 multiple=True,
             ).props("outlined use-chips options-dense").classes("w-full")
-            with ui.row().classes("w-full gap-3"):
+            with ui.row().classes("editor-fields w-full"):
                 self.defense_mode = ui.select(
                     DEFENSE_MODES, value=self.base.defense_mode, label="선택 방식",
                 ).props("outlined").classes("control-grow")
@@ -737,7 +737,7 @@ class _StrategyEditor:
             )
         with ui.card().classes("editor-section w-full"):
             ui.label("비중 및 위험회피").classes("font-bold")
-            with ui.row().classes("w-full gap-3"):
+            with ui.row().classes("editor-fields w-full"):
                 self.weight_mode = ui.select(
                     WEIGHT_MODES, value=self.base.weight_mode, label="비중 방식",
                 ).props("outlined").classes("control-grow")
@@ -756,7 +756,7 @@ class _StrategyEditor:
             self.canary_kind, self.canary_months, self.canary_score = self._momentum(
                 "카나리아 모멘텀", self.base.canary_momentum,
             )
-            with ui.row().classes("w-full gap-3"):
+            with ui.row().classes("editor-fields w-full"):
                 self.canary_apply = ui.select(
                     ["방어형", "공격형"], value=self.base.canary_apply_mode,
                     label="카나리아 적용 방식",
@@ -782,12 +782,12 @@ class _StrategyEditor:
             self.market_combine = ui.radio(
                 ["OR", "AND"], value=self.base.market_combine,
             ).props("inline")
-            with ui.row().classes("w-full gap-3"):
+            with ui.row().classes("editor-fields w-full"):
                 rule_2y = self.base.spread_10y2y or SpreadRule(7, 8, -0.5)
                 self.spread_2y_lag = ui.number("10Y-2Y 지연(개월)", value=rule_2y.lag_months, min=0, max=24).props("outlined").classes("control-grow")
                 self.spread_2y_active = ui.number("10Y-2Y 반영 기간", value=rule_2y.active_months, min=1, max=24).props("outlined").classes("control-grow")
                 self.spread_2y_threshold = ui.number("10Y-2Y 역전값(%p)", value=rule_2y.threshold, step=.1).props("outlined").classes("control-grow")
-            with ui.row().classes("w-full gap-3"):
+            with ui.row().classes("editor-fields w-full"):
                 rule = self.base.spread_10y3m or SpreadRule(7, 8, -0.5)
                 self.spread_lag = ui.number("10Y-3M 지연(개월)", value=rule.lag_months, min=0, max=24).props("outlined").classes("control-grow")
                 self.spread_active = ui.number("10Y-3M 반영 기간", value=rule.active_months, min=1, max=24).props("outlined").classes("control-grow")
@@ -796,7 +796,7 @@ class _StrategyEditor:
 
     @staticmethod
     def _momentum(label: str, value: MomentumSpec):
-        with ui.row().classes("w-full gap-3"):
+        with ui.row().classes("editor-fields w-full"):
             kind = ui.select(MOMENTUM_KINDS, value=value.kind, label=f"{label} 기준").props("outlined").classes("control-grow")
             months = ui.number("기간(개월)", value=value.months, min=1, max=24, step=1).props("outlined").classes("control-grow")
             score = ui.select(SCORE_TYPES, value=value.score_type, label="스코어 구성").props("outlined").classes("control-grow")
@@ -1097,14 +1097,14 @@ def backtest_page() -> None:
                 preset_options(), value=next(iter(BUILTIN_PRESET_SPECS)),
                 label="내 프리셋",
             ).props("outlined options-dense").classes("w-full")
-            with ui.row().classes("w-full gap-3"):
+            with ui.row().classes("backtest-field-grid backtest-date-grid w-full"):
                 start_input = ui.input("시작일", value="2010-01-01").props(
                     "type=date"
                 ).classes("date-input")
                 end_input = ui.input(
                     "종료일", value=datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat(),
                 ).props("type=date").classes("date-input")
-            with ui.row().classes("w-full gap-3"):
+            with ui.row().classes("backtest-field-grid w-full"):
                 initial = ui.number(
                     "초기 투자금", value=10_000, min=100, step=1_000,
                 ).props("outlined").classes("control-grow")
@@ -1386,6 +1386,19 @@ ui.add_css(
     .strategy-expansion .q-expansion-item__content { padding: 8px 18px 20px; }
     .editor-section { border-radius: 16px; border: 1px solid #eceef4;
       box-shadow: none; padding: 16px; gap: 12px; }
+    .editor-fields, .backtest-field-grid {
+      display: grid !important;
+      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      gap: 12px;
+      align-items: start;
+    }
+    .editor-fields > *, .backtest-field-grid > * {
+      width: 100% !important;
+      min-width: 0 !important;
+      max-width: none !important;
+      flex: none !important;
+    }
+    .editor-section .q-field, .backtest-controls .q-field { width: 100%; }
     .preset-library { padding: 18px; gap: 10px; }
     .preset-upload { width: min(420px, 100%); }
     .diagnostic-download { align-self: flex-start; }
@@ -1408,7 +1421,15 @@ ui.add_css(
       .dashboard-chart { height: 360px; }
       .result-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
       .rebalance-summary { grid-template-columns: 1fr !important; }
-      .control-grow { min-width: 100%; }
+      .editor-fields, .backtest-field-grid {
+        grid-template-columns: 1fr !important;
+        gap: 10px;
+      }
+      .backtest-date-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+      .editor-fields .control-grow, .backtest-field-grid .control-grow {
+        min-width: 0 !important;
+        width: 100% !important;
+      }
     }
     """
 )
