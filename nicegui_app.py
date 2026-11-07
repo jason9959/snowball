@@ -646,25 +646,25 @@ async def account_dashboard_page(account_tab: str) -> None:
 
 
 USER_PRESET_PREFIX = "사용자::"
-MOMENTUM_KINDS = ("수익률", "이동평균", "모멘텀 스코어")
-SCORE_TYPES = (
+MOMENTUM_KINDS = ["수익률", "이동평균", "모멘텀 스코어"]
+SCORE_TYPES = [
     "1-3-6개월 단순", "3-6-12개월 단순", "1-3-6-12개월 단순",
     "1-3-6-9-12개월 단순", "1-3-6-12개월 가중",
-)
-ATTACK_MODES = (
+]
+ATTACK_MODES = [
     "상대 모멘텀", "절대 모멘텀", "절대 모멘텀 + 방어 스위치",
     "상대 & 절대 모멘텀", "상대 & 절대 모멘텀 + 방어 스위치",
-)
-DEFENSE_MODES = (
+]
+DEFENSE_MODES = [
     "전체 동일 비중", "상대 모멘텀", "절대 모멘텀",
     "상대 & 절대 모멘텀 + 현금 스위치",
-)
-WEIGHT_MODES = ("고정 범위", "마이너스 절대 모멘텀 수")
-MARKET_SIGNALS = (
+]
+WEIGHT_MODES = ["고정 범위", "마이너스 절대 모멘텀 수"]
+MARKET_SIGNALS = [
     "장단기 금리차 역전 (10년-2년)",
     "장단기 금리차 역전 (10년-3개월)",
     "S&P500 배당수익률",
-)
+]
 
 
 def _load_browser_presets() -> dict[str, UserPreset]:
@@ -758,11 +758,11 @@ class _StrategyEditor:
             )
             with ui.row().classes("w-full gap-3"):
                 self.canary_apply = ui.select(
-                    ("방어형", "공격형"), value=self.base.canary_apply_mode,
+                    ["방어형", "공격형"], value=self.base.canary_apply_mode,
                     label="카나리아 적용 방식",
                 ).props("outlined").classes("control-grow")
                 self.canary_direction = ui.select(
-                    ("마이너스(-)", "플러스(+)"), value=self.base.canary_direction,
+                    ["마이너스(-)", "플러스(+)"], value=self.base.canary_direction,
                     label="위험 신호 방향",
                 ).props("outlined").classes("control-grow")
                 rounding = (
@@ -770,7 +770,7 @@ class _StrategyEditor:
                     else str(self.base.canary_decision_percent_digits)
                 )
                 self.canary_rounding = ui.select(
-                    ("원본값", "0", "1", "2", "3", "4", "5", "6"),
+                    ["원본값", "0", "1", "2", "3", "4", "5", "6"],
                     value=rounding, label="판정 반올림 자릿수",
                 ).props("outlined").classes("control-grow")
         with ui.card().classes("editor-section w-full"):
@@ -780,7 +780,7 @@ class _StrategyEditor:
                 multiple=True,
             ).props("outlined use-chips options-dense").classes("w-full")
             self.market_combine = ui.radio(
-                ("OR", "AND"), value=self.base.market_combine,
+                ["OR", "AND"], value=self.base.market_combine,
             ).props("inline")
             with ui.row().classes("w-full gap-3"):
                 rule_2y = self.base.spread_10y2y or SpreadRule(7, 8, -0.5)
