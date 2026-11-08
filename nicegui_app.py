@@ -239,6 +239,9 @@ def home_page() -> None:
 async def accounts_page() -> None:
     _shell("accounts")
     with ui.column().classes("page-container w-full gap-4"):
+        ui.button(
+            "메인으로", icon="arrow_back", on_click=lambda: ui.navigate.to("/"),
+        ).props("flat no-caps").classes("page-back-button")
         with ui.row().classes("w-full items-center justify-between"):
             with ui.column().classes("gap-0"):
                 ui.label("투자 계좌 현황").classes("page-title")
@@ -552,7 +555,7 @@ async def account_dashboard_page(account_tab: str) -> None:
             with ui.row().classes("items-center gap-2"):
                 ui.button(icon="arrow_back", on_click=lambda: ui.navigate.to("/accounts")).props(
                     "round flat"
-                )
+                ).tooltip("계좌 목록")
                 with ui.column().classes("gap-0"):
                     ui.label(_account_name(account_tab)).classes("page-title")
                     ui.label("Google Sheet 읽기 전용 계좌 대시보드").classes("page-subtitle")
@@ -1354,6 +1357,7 @@ ui.add_css(
     .page-container { max-width: 1040px; margin: 0 auto; padding: 92px 20px 36px; }
     .page-title { font-size: clamp(1.55rem, 4vw, 2.25rem); font-weight: 800; line-height: 1.2; }
     .page-subtitle { color: #687080; font-size: .95rem; }
+    .page-back-button { align-self: flex-start; color: #4f5b70; margin-left: -10px; }
     .feature-card, .account-card, .migration-note { border-radius: 20px; border: 1px solid #e8ebf2;
       box-shadow: 0 8px 26px rgba(32,47,79,.06); padding: 22px; }
     .feature-card { min-height: 260px; justify-content: space-between; }
