@@ -163,6 +163,31 @@ class AccountStoreTest(unittest.TestCase):
         self.assertEqual(loaded[0]["수정시각"], "")
         self.assertEqual(worksheet.row_values(1), list(LEGACY_TRADE_COLUMNS))
 
+    def test_readonly_load_accepts_redesigned_unique_headers(self):
+        headers = [
+            "입력날짜", "입력시각", "거래일", "유형", "시장", "종목코드",
+            "종목명", "수량", "체결단가", "거래금액", "수수료·세금",
+            "결제금액", "통화", "환율", "메모",
+        ]
+        row = [
+            "2026-11-02", "05:09:15", "2026-11-02", "매수", "미국", "BIL",
+            "T-Bill", 2, 91.41, 182.82, 0.12, 182.94, "USD", 1347.3, "",
+        ]
+        worksheet = FakeWorksheet("계좌_일반계좌1", [headers, row])
+        store = GoogleSheetAccountStore(FakeSpreadsheet([worksheet]))
+        loaded = store.load_transactions_readonly("계좌_일반계좌1")
+        self.assertEqual(loaded[0]["거래금액"], 182.82)
+        self.assertEqual(loaded[0]["금액"], 182.82)
+        self.assertEqual(loaded[0]["상태"], "")
+
+    def test_readonly_load_rejects_duplicate_headers(self):
+        worksheet = FakeWorksheet(
+            "계좌_일반계좌1", [["거래일", "유형", "금액", "금액"]],
+        )
+        store = GoogleSheetAccountStore(FakeSpreadsheet([worksheet]))
+        with self.assertRaisesRegex(SheetSchemaError, "중복"):
+            store.load_transactions_readonly("계좌_일반계좌1")
+
     def test_create_append_update_and_cancel_transaction(self):
         spreadsheet = FakeSpreadsheet()
         store = GoogleSheetAccountStore(spreadsheet)

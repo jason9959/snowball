@@ -13,6 +13,7 @@ import pandas as pd
 class AccountValuation:
     history: pd.DataFrame
     holdings: pd.DataFrame
+    currency_assets: dict[str, pd.DataFrame]
     net_deposits: float
     cash: float
     holdings_value: float
@@ -47,6 +48,15 @@ def transaction_frame(
     frame = pd.DataFrame(records)
     if frame.empty:
         return frame
+    defaults: dict[str, Any] = {
+        "입력날짜": "", "입력시각": "", "거래일": "", "유형": "",
+        "시장": "", "종목코드": "", "종목명": "", "수량": 0,
+        "체결단가": 0, "거래금액": 0, "금액": 0, "결제금액": 0,
+        "수수료·세금": 0, "통화": "", "환율": 1, "상태": "",
+    }
+    for column, default in defaults.items():
+        if column not in frame:
+            frame[column] = default
     status = frame["상태"].fillna("").astype(str).str.strip()
     active = status.isin(("", "정상"))
     if account_id is not None:
@@ -58,8 +68,12 @@ def transaction_frame(
         return frame
     frame["거래일"] = pd.to_datetime(frame["거래일"], errors="coerce").dt.normalize()
     frame = frame.dropna(subset=["거래일"])
-    for column in ("수량", "체결단가", "수수료·세금", "금액", "환율"):
+    blank_amount = frame["금액"].fillna("").astype(str).str.strip().isin(("", "0", "0.0"))
+    for column in (
+        "수량", "체결단가", "거래금액", "수수료·세금", "금액", "결제금액", "환율",
+    ):
         frame[column] = pd.to_numeric(frame[column], errors="coerce").fillna(0.0)
+    frame.loc[blank_amount, "금액"] = frame.loc[blank_amount, "거래금액"]
     missing_trade_amount = frame["유형"].isin(("매수", "매도")) & frame["금액"].eq(0.0)
     frame.loc[missing_trade_amount, "금액"] = (
         frame.loc[missing_trade_amount, "수량"]
@@ -70,7 +84,88 @@ def transaction_frame(
     frame["Yahoo종목"] = [
         yahoo_symbol(code, market) for code, market in zip(frame["종목코드"], frame["시장"])
     ]
-    return frame.sort_values(["거래일", "입력시각"], kind="stable")
+    input_date = frame["입력날짜"].fillna("").astype(str).str.strip()
+    input_time = frame["입력시각"].fillna("").astype(str).str.strip()
+    combined = (input_date + " " + input_time).str.strip()
+    frame["_입력정렬"] = pd.to_datetime(combined, format="mixed", errors="coerce")
+    fallback = pd.to_datetime(frame["입력시각"], format="mixed", errors="coerce")
+    frame["_입력정렬"] = frame["_입력정렬"].fillna(fallback).fillna(frame["거래일"])
+    return frame.sort_values(["거래일", "_입력정렬"], kind="stable")
+
+
+def _currency_asset_histories(
+    frame: pd.DataFrame,
+    closes: pd.DataFrame,
+    dates: pd.DatetimeIndex,
+) -> dict[str, pd.DataFrame]:
+    """Return native-currency cost and market value histories for held assets."""
+    trades = frame[
+        frame["유형"].isin(("매수", "매도")) & frame["Yahoo종목"].ne("")
+    ].copy()
+    if trades.empty:
+        return {}
+    histories: dict[str, pd.DataFrame] = {}
+    for symbol, symbol_trades in trades.groupby("Yahoo종목", sort=False):
+        symbol_trades = symbol_trades.sort_values(["거래일", "_입력정렬"], kind="stable")
+        currency = str(symbol_trades["통화"].replace("", np.nan).dropna().iloc[-1]).upper() \
+            if not symbol_trades["통화"].replace("", np.nan).dropna().empty \
+            else ("KRW" if str(symbol).endswith(".KS") else "USD")
+        quantity = 0.0
+        cost_basis = 0.0
+        daily_quantity = pd.Series(0.0, index=dates)
+        daily_cost = pd.Series(0.0, index=dates)
+        daily_flow = pd.Series(0.0, index=dates)
+        grouped = {day: group for day, group in symbol_trades.groupby("거래일", sort=True)}
+        for day in dates:
+            for _, trade in grouped.get(day, pd.DataFrame()).iterrows():
+                trade_quantity = max(float(trade["수량"]), 0.0)
+                trade_amount = float(trade["금액"])
+                if trade_amount == 0.0:
+                    trade_amount = trade_quantity * float(trade["체결단가"])
+                fee = float(trade["수수료·세금"])
+                if trade["유형"] == "매수":
+                    quantity += trade_quantity
+                    cost_basis += trade_amount + fee
+                    daily_flow.loc[day] += trade_amount + fee
+                elif trade["유형"] == "매도" and quantity > 0.0:
+                    sold = min(trade_quantity, quantity)
+                    average_cost = cost_basis / quantity if quantity else 0.0
+                    quantity -= sold
+                    cost_basis = max(cost_basis - average_cost * sold, 0.0)
+                    daily_flow.loc[day] -= max(trade_amount - fee, 0.0)
+                    if quantity <= 1e-10:
+                        quantity = 0.0
+                        cost_basis = 0.0
+            daily_quantity.loc[day] = quantity
+            daily_cost.loc[day] = cost_basis
+
+        price = (
+            closes[symbol].reindex(dates).ffill()
+            if symbol in closes else pd.Series(index=dates, dtype=float)
+        )
+        trade_prices = symbol_trades.groupby("거래일")["체결단가"].last().reindex(dates)
+        price = price.combine_first(trade_prices).ffill()
+        market_value = daily_quantity * price.fillna(0.0)
+        target = histories.setdefault(currency, pd.DataFrame({
+            "매입원가": 0.0, "시장평가액": 0.0, "투자금흐름": 0.0,
+        }, index=dates))
+        target["매입원가"] = target["매입원가"].add(daily_cost, fill_value=0.0)
+        target["시장평가액"] = target["시장평가액"].add(market_value, fill_value=0.0)
+        target["투자금흐름"] = target["투자금흐름"].add(daily_flow, fill_value=0.0)
+
+    for currency, history in histories.items():
+        previous_value = history["시장평가액"].shift(1)
+        invested_base = previous_value + history["투자금흐름"]
+        daily_return = (history["시장평가액"] / invested_base - 1.0).where(
+            invested_base > 1e-10, 0.0,
+        )
+        history["일수익률"] = daily_return.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+        history["평가손익"] = history["시장평가액"] - history["매입원가"]
+        history["평가수익률"] = (
+            history["평가손익"] / history["매입원가"].replace(0.0, np.nan)
+        )
+        histories[currency] = history
+    return histories
 
 
 def required_price_symbols(frame: pd.DataFrame) -> tuple[str, ...]:
@@ -131,7 +226,7 @@ def calculate_account_valuation(
 ) -> AccountValuation:
     if frame.empty:
         return AccountValuation(
-            history=pd.DataFrame(), holdings=pd.DataFrame(), net_deposits=0.0,
+            history=pd.DataFrame(), holdings=pd.DataFrame(), currency_assets={}, net_deposits=0.0,
             cash=0.0, holdings_value=0.0, total_value=0.0, profit=0.0,
             return_rate=None,
         )
@@ -210,6 +305,7 @@ def calculate_account_valuation(
         (history["총평가액"] - history["입출금"]) / previous_value - 1.0
     ).where(previous_value.abs() > 1e-10, 0.0)
     history["일수익률"] = daily_return.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    currency_assets = _currency_asset_histories(frame, closes, dates)
     total_value = float(history["총평가액"].iloc[-1])
     net_deposits = float(daily_external.sum())
     profit = total_value - net_deposits
@@ -220,6 +316,7 @@ def calculate_account_valuation(
     return AccountValuation(
         history=history,
         holdings=holdings,
+        currency_assets=currency_assets,
         net_deposits=net_deposits,
         cash=float(cash_balance.iloc[-1]),
         holdings_value=float(holding_values.iloc[-1]),

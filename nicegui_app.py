@@ -305,37 +305,102 @@ def _money(value: float) -> str:
     return f"{value:,.0f}원"
 
 
+def _currency_money(value: float, currency: str) -> str:
+    return f"{value:,.0f}원" if currency == "KRW" else f"${value:,.2f}"
+
+
 def _metric_card(label: str, value: str) -> None:
     with ui.card().classes("metric-card"):
         ui.label(label).classes("metric-label")
         ui.label(value).classes("metric-value")
 
 
-def _render_value_chart(data: AccountDashboardData) -> None:
-    history = data.performance.history
-    if history.empty:
-        ui.label("표시할 평가액 데이터가 없습니다.").classes("empty-state")
+def _render_currency_asset_charts(data: AccountDashboardData) -> None:
+    if not data.currency_assets:
+        ui.label("선택한 기간에 보유한 원화·달러 자산이 없습니다.").classes("empty-state")
         return
-    dates = [timestamp.strftime("%Y-%m-%d") for timestamp in history.index]
-    ui.echart({
-        "tooltip": {"trigger": "axis"},
-        "legend": {"bottom": 0, "data": ["총평가액", "보유자산", "입출금"]},
-        "grid": {"left": 64, "right": 32, "top": 30, "bottom": 58},
-        "xAxis": {"type": "category", "data": dates, "axisLabel": {"hideOverlap": True}},
-        "yAxis": [
-            {"type": "value", "name": "평가액(원)", "scale": True},
-            {"type": "value", "name": "입출금(원)", "scale": True},
-        ],
-        "dataZoom": [{"type": "inside"}],
-        "series": [
-            {"name": "총평가액", "type": "line", "showSymbol": False,
-             "data": history["총평가액"].round(0).tolist(), "lineStyle": {"width": 3}},
-            {"name": "보유자산", "type": "line", "showSymbol": False,
-             "data": history["보유자산"].round(0).tolist(), "lineStyle": {"width": 2}},
-            {"name": "입출금", "type": "bar", "yAxisIndex": 1,
-             "data": history["입출금"].round(0).tolist(), "itemStyle": {"opacity": .55}},
-        ],
-    }).classes("dashboard-chart w-full")
+    for currency in ("KRW", "USD"):
+        metrics = data.currency_assets.get(currency)
+        if metrics is None or metrics.history.empty:
+            continue
+        history = metrics.history
+        latest = history.iloc[-1]
+        cost = float(latest.get("매입원가", 0.0))
+        market = float(latest.get("시장평가액", 0.0))
+        profit = market - cost
+        unrealized_return = profit / cost if cost > 1e-10 else None
+        label = "원화 자산" if currency == "KRW" else "달러 자산"
+        with ui.card().classes("currency-asset-card w-full"):
+            ui.label(label).classes("section-title")
+            ui.label(
+                "보유 종목의 매입원가와 일별 종가 기준 평가액입니다. 현금은 포함하지 않습니다."
+            ).classes("text-xs text-grey-6")
+            dates = [timestamp.strftime("%Y-%m-%d") for timestamp in history.index]
+            ui.echart({
+                "tooltip": {"trigger": "axis"},
+                "legend": {"bottom": 0, "data": ["매입원가", "시장평가액"]},
+                "grid": {"left": 68, "right": 28, "top": 30, "bottom": 58},
+                "xAxis": {
+                    "type": "category", "data": dates,
+                    "axisLabel": {"hideOverlap": True},
+                },
+                "yAxis": {
+                    "type": "value", "name": currency, "scale": True,
+                    "axisLabel": {"formatter": "{value}"},
+                },
+                "dataZoom": [{"type": "inside"}],
+                "series": [
+                    {
+                        "name": "매입원가", "type": "line", "showSymbol": False,
+                        "data": history["매입원가"].fillna(0.0).round(2).tolist(),
+                        "lineStyle": {"width": 2, "type": "dashed"},
+                    },
+                    {
+                        "name": "시장평가액", "type": "line", "showSymbol": False,
+                        "data": history["시장평가액"].fillna(0.0).round(2).tolist(),
+                        "lineStyle": {"width": 3},
+                        "areaStyle": {"opacity": .08},
+                    },
+                ],
+            }).classes("dashboard-chart w-full")
+            cards = (
+                ("현재 매입원가", _currency_money(cost, currency)),
+                ("현재 평가액", _currency_money(market, currency)),
+                ("평가손익", _currency_money(profit, currency)),
+                ("평가수익률", _percent(unrealized_return)),
+                ("기간 수익률(TWR)", _percent(metrics.period_return)),
+                ("최대 낙폭(MDD)", _percent(metrics.max_drawdown)),
+            )
+            with ui.grid(columns=3).classes("currency-metric-grid w-full gap-3"):
+                for metric_label, value in cards:
+                    _metric_card(metric_label, value)
+
+
+def _render_account_metrics(data: AccountDashboardData) -> None:
+    valuation = data.valuation
+    performance = data.performance
+    metrics = (
+        ("총 평가액", _money(valuation.total_value)),
+        ("현금", _money(valuation.cash)),
+        ("보유자산", _money(valuation.holdings_value)),
+        ("누적 평가손익", _money(valuation.profit)),
+        ("누적 입금", _money(data.cumulative_deposits)),
+        ("누적 출금", _money(data.cumulative_withdrawals)),
+        ("누적 단순수익률", _percent(valuation.return_rate if data.performance_valid else None)),
+        ("기간 수익률(TWR)", _percent(performance.period_return if data.performance_valid else None)),
+        ("연환산 수익률", _percent(performance.annualized_return if data.performance_valid else None)),
+        ("최대 낙폭(MDD)", _percent(performance.max_drawdown if data.performance_valid else None)),
+        ("현재 낙폭", _percent(performance.current_drawdown if data.performance_valid else None)),
+        ("기간 순입출금", _money(data.period_deposits - data.period_withdrawals)),
+    )
+    ui.label("계좌 전체 지표").classes("section-title")
+    with ui.grid(columns=4).classes("metric-grid w-full gap-3"):
+        for label, value in metrics:
+            _metric_card(label, value)
+    ui.label(
+        "통화별·계좌 전체 기간수익률과 낙폭은 매수·매도 및 입출금 영향을 제거한 "
+        "시간가중수익률(TWR) 기준입니다."
+    ).classes("text-xs text-grey-6")
 
 
 def _render_return_chart(data: AccountDashboardData) -> None:
@@ -388,27 +453,6 @@ def _render_dashboard_content(account_tab: str, data: AccountDashboardData) -> N
     ui.label(f"{_account_name(account_tab)} · {data.end_date:%Y-%m-%d} 기준").classes(
         "section-title"
     )
-    metrics = (
-        ("총 평가액", _money(valuation.total_value)),
-        ("현금", _money(valuation.cash)),
-        ("보유자산", _money(valuation.holdings_value)),
-        ("누적 평가손익", _money(valuation.profit)),
-        ("누적 입금", _money(data.cumulative_deposits)),
-        ("누적 출금", _money(data.cumulative_withdrawals)),
-        ("누적 단순수익률", _percent(valuation.return_rate if data.performance_valid else None)),
-        ("기간 수익률(TWR)", _percent(performance.period_return if data.performance_valid else None)),
-        ("연환산 수익률", _percent(performance.annualized_return if data.performance_valid else None)),
-        ("최대 낙폭(MDD)", _percent(performance.max_drawdown if data.performance_valid else None)),
-        ("현재 낙폭", _percent(performance.current_drawdown if data.performance_valid else None)),
-        ("기간 순입출금", _money(data.period_deposits - data.period_withdrawals)),
-    )
-    with ui.grid(columns=4).classes("metric-grid w-full gap-3"):
-        for label, value in metrics:
-            _metric_card(label, value)
-    ui.label(
-        "기간수익률과 낙폭은 입출금 영향을 제거한 시간가중수익률(TWR) 기준입니다."
-    ).classes("text-xs text-grey-6")
-
     with ui.tabs().classes("w-full dashboard-tabs") as tabs:
         overview_tab = ui.tab("평가액", icon="monitoring")
         return_tab = ui.tab("수익률", icon="show_chart")
@@ -417,7 +461,8 @@ def _render_dashboard_content(account_tab: str, data: AccountDashboardData) -> N
         rebalance_tab = ui.tab("리밸런싱", icon="notifications")
     with ui.tab_panels(tabs, value=overview_tab).classes("w-full dashboard-panels"):
         with ui.tab_panel(overview_tab):
-            _render_value_chart(data)
+            _render_currency_asset_charts(data)
+            _render_account_metrics(data)
         with ui.tab_panel(return_tab):
             _render_return_chart(data)
         with ui.tab_panel(holdings_tab):
@@ -592,8 +637,12 @@ async def account_dashboard_page(account_tab: str) -> None:
         if not await load_records():
             return
         first_date, today = state["bounds"]  # type: ignore[misc]
+        default_start = max(
+            first_date,
+            (pd.Timestamp(today) - pd.DateOffset(years=5)).date(),
+        )
         with controls:
-            start_input = ui.input("조회 시작일", value=first_date.isoformat()).props(
+            start_input = ui.input("조회 시작일", value=default_start.isoformat()).props(
                 f"type=date min={first_date.isoformat()} max={today.isoformat()}"
             ).classes("date-input")
             end_input = ui.input("조회 종료일", value=today.isoformat()).props(
@@ -1382,6 +1431,9 @@ ui.add_css(
     .dashboard-panels { border-radius: 18px; border: 1px solid #e8ebf2;
       box-shadow: 0 8px 26px rgba(32,47,79,.05); }
     .dashboard-chart { height: 430px; }
+    .currency-asset-card { border-radius: 18px; border: 1px solid #e8ebf2;
+      box-shadow: none; padding: 18px; gap: 12px; margin-bottom: 16px; }
+    .currency-metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
     .account-table { max-width: 100%; overflow-x: auto; }
     .backtest-controls { border-radius: 20px; border: 1px solid #e8ebf2;
       box-shadow: 0 8px 26px rgba(32,47,79,.06); padding: 22px; gap: 16px; }
@@ -1423,6 +1475,7 @@ ui.add_css(
       .strategy-expansion .q-expansion-item__content { padding: 6px 10px 14px; }
       .editor-section { padding: 12px; }
       .dashboard-chart { height: 360px; }
+      .currency-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
       .result-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
       .rebalance-summary { grid-template-columns: 1fr !important; }
       .editor-fields, .backtest-field-grid {

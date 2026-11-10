@@ -109,6 +109,39 @@ class AccountingTest(unittest.TestCase):
         self.assertAlmostEqual(metrics.max_drawdown or 0, -0.20)
         self.assertAlmostEqual(metrics.current_drawdown or 0, -0.20)
 
+    def test_currency_asset_history_tracks_cost_and_native_market_value(self):
+        records = [
+            {
+                "입력날짜": "2026-11-01", "입력시각": "09:00:00",
+                "거래일": "2026-11-01", "유형": "매수", "시장": "한국",
+                "종목코드": "069500", "종목명": "KODEX 200", "수량": 10,
+                "체결단가": 10_000, "거래금액": 100_000, "수수료·세금": 100,
+                "결제금액": 100_100, "통화": "KRW", "환율": 1, "메모": "",
+            },
+            {
+                "입력날짜": "2026-11-01", "입력시각": "23:00:00",
+                "거래일": "2026-11-01", "유형": "매수", "시장": "미국",
+                "종목코드": "QQQ", "종목명": "Invesco QQQ", "수량": 2,
+                "체결단가": 500, "거래금액": 1_000, "수수료·세금": 1,
+                "결제금액": 1_001, "통화": "USD", "환율": 1_350, "메모": "",
+            },
+        ]
+        closes = pd.DataFrame(
+            {"069500.KS": [10_000.0, 11_000.0], "QQQ": [500.0, 525.0]},
+            index=pd.to_datetime(["2026-11-01", "2026-11-02"]),
+        )
+        valuation = calculate_account_valuation(
+            transaction_frame(records), closes, pd.Series(
+                [1350.0, 1360.0], index=closes.index,
+            ), end_date=pd.Timestamp("2026-11-02"),
+        )
+        krw = valuation.currency_assets["KRW"].iloc[-1]
+        usd = valuation.currency_assets["USD"].iloc[-1]
+        self.assertAlmostEqual(float(krw["매입원가"]), 100_100)
+        self.assertAlmostEqual(float(krw["시장평가액"]), 110_000)
+        self.assertAlmostEqual(float(usd["매입원가"]), 1_001)
+        self.assertAlmostEqual(float(usd["시장평가액"]), 1_050)
+
 
 if __name__ == "__main__":
     unittest.main()

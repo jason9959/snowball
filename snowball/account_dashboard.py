@@ -19,8 +19,9 @@ from snowball.accounting import (
 
 
 LEDGER_DISPLAY_COLUMNS = (
-    "입력시각", "거래일", "유형", "시장", "종목코드", "종목명", "수량",
-    "체결단가", "수수료·세금", "금액", "통화", "환율", "메모", "상태",
+    "입력날짜", "입력시각", "거래일", "유형", "시장", "종목코드", "종목명",
+    "수량", "체결단가", "거래금액", "수수료·세금", "결제금액", "통화", "환율",
+    "메모", "상태",
 )
 
 
@@ -37,6 +38,7 @@ class AccountDashboardData:
     period_deposits: float
     period_withdrawals: float
     performance_valid: bool
+    currency_assets: dict[str, AccountPeriodMetrics]
     ledger: pd.DataFrame
 
 
@@ -85,6 +87,13 @@ def build_account_dashboard(
         end_date=end_ts,
     )
     performance = account_period_metrics(valuation.history, start_ts, end_ts)
+    currency_assets = {
+        currency: account_period_metrics(history, start_ts, end_ts)
+        for currency, history in valuation.currency_assets.items()
+        if not history.loc[(history.index >= start_ts) & (history.index <= end_ts), [
+            "매입원가", "시장평가액",
+        ]].fillna(0.0).eq(0.0).all().all()
+    }
     period_frame = frame_to_end[
         (frame_to_end["거래일"] >= start_ts) & (frame_to_end["거래일"] <= end_ts)
     ]
@@ -92,7 +101,17 @@ def build_account_dashboard(
     ledger = pd.DataFrame(records)
     if not ledger.empty:
         ledger["_거래일"] = pd.to_datetime(ledger["거래일"], errors="coerce")
-        ledger["_입력시각"] = pd.to_datetime(ledger["입력시각"], errors="coerce")
+        input_date = (
+            ledger["입력날짜"] if "입력날짜" in ledger
+            else pd.Series("", index=ledger.index)
+        ).fillna("").astype(str).str.strip()
+        input_time = (
+            ledger["입력시각"] if "입력시각" in ledger
+            else pd.Series("", index=ledger.index)
+        ).fillna("").astype(str).str.strip()
+        ledger["_입력시각"] = pd.to_datetime(
+            (input_date + " " + input_time).str.strip(), format="mixed", errors="coerce",
+        ).fillna(pd.to_datetime(input_time, format="mixed", errors="coerce"))
         ledger = ledger[
             (ledger["_거래일"] >= start_ts) & (ledger["_거래일"] <= end_ts)
         ].sort_values(["_거래일", "_입력시각"], ascending=False, kind="stable")
@@ -114,5 +133,6 @@ def build_account_dashboard(
         period_deposits=amount("입금", period_frame),
         period_withdrawals=amount("출금", period_frame),
         performance_valid=valuation.cash >= -1e-6,
+        currency_assets=currency_assets,
         ledger=ledger,
     )

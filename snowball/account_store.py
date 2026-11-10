@@ -18,6 +18,13 @@ LEGACY_TRADE_COLUMNS = (
     "수량", "체결단가", "수수료·세금", "금액", "통화", "환율", "메모", "상태",
 )
 TRADE_COLUMNS = LEGACY_TRADE_COLUMNS + ("수정시각",)
+READONLY_REQUIRED_COLUMNS = ("거래일", "유형")
+READONLY_OPTIONAL_COLUMNS = {
+    "거래ID": "", "입력날짜": "", "입력시각": "", "시장": "",
+    "종목코드": "", "종목명": "", "수량": "", "체결단가": "",
+    "거래금액": "", "금액": "", "수수료·세금": "", "결제금액": "",
+    "통화": "", "환율": "", "메모": "", "상태": "", "수정시각": "",
+}
 
 SYSTEM_SHEET_SCHEMAS: dict[str, tuple[str, ...]] = {
     "리밸런싱기록": (
@@ -156,28 +163,30 @@ class GoogleSheetAccountStore:
             raise ValueError("선택한 계좌 탭을 찾을 수 없습니다.")
         worksheet = self.spreadsheet.worksheet(account_tab)
         first_row = tuple(str(value).strip() for value in worksheet.row_values(1))
-        if first_row == TRADE_COLUMNS:
-            rows = worksheet.get_all_records(
-                expected_headers=list(TRADE_COLUMNS), default_blank="",
+        if not first_row:
+            return []
+        duplicates = sorted({column for column in first_row if first_row.count(column) > 1})
+        if duplicates:
+            raise SheetSchemaError(
+                f"'{account_tab}' 탭에 중복된 열 이름이 있습니다: {', '.join(duplicates)}"
             )
-            return [
-                {column: row.get(column, "") for column in TRADE_COLUMNS}
-                for row in rows
-            ]
-        if first_row == LEGACY_TRADE_COLUMNS:
-            rows = worksheet.get_all_records(
-                expected_headers=list(LEGACY_TRADE_COLUMNS), default_blank="",
+        missing = [column for column in READONLY_REQUIRED_COLUMNS if column not in first_row]
+        if missing:
+            raise SheetSchemaError(
+                f"'{account_tab}' 탭에 필요한 열이 없습니다: {', '.join(missing)}"
             )
-            return [
-                {
-                    **{column: row.get(column, "") for column in LEGACY_TRADE_COLUMNS},
-                    "수정시각": "",
-                }
-                for row in rows
-            ]
-        raise SheetSchemaError(
-            f"'{account_tab}' 탭의 첫 행이 예상 헤더와 다릅니다."
-        )
+        values = worksheet.get_all_values()
+        records: list[dict[str, Any]] = []
+        for values_row in values[1:]:
+            padded = list(values_row) + [""] * (len(first_row) - len(values_row))
+            source = dict(zip(first_row, padded))
+            if not any(str(value).strip() for value in source.values()):
+                continue
+            record = {**READONLY_OPTIONAL_COLUMNS, **source}
+            if not str(record.get("금액", "")).strip():
+                record["금액"] = record.get("거래금액", "")
+            records.append(record)
+        return records
 
     def append_transaction(self, account_tab: str, record: Mapping[str, Any]) -> None:
         worksheet = self._account_worksheet(account_tab)
