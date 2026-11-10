@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: snowball-portfolio-lab
+    name: cinema9959
     runtime: docker
     plan: free
     healthCheckPath: /healthz
