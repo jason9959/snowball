@@ -311,8 +311,9 @@ def _currency_money(value: float, currency: str) -> str:
 
 def _metric_card(label: str, value: str) -> None:
     with ui.card().classes("metric-card"):
-        ui.label(label).classes("metric-label")
-        ui.label(value).classes("metric-value")
+        with ui.row().classes("metric-row w-full items-center justify-between no-wrap"):
+            ui.label(label).classes("metric-label")
+            ui.label(value).classes("metric-value")
 
 
 def _render_currency_asset_charts(data: AccountDashboardData) -> None:
@@ -454,11 +455,11 @@ def _render_dashboard_content(account_tab: str, data: AccountDashboardData) -> N
         "section-title"
     )
     with ui.tabs().classes("w-full dashboard-tabs") as tabs:
-        overview_tab = ui.tab("평가액", icon="monitoring")
+        overview_tab = ui.tab("평가액", icon="analytics")
         return_tab = ui.tab("수익률", icon="show_chart")
         holdings_tab = ui.tab("보유종목", icon="account_balance_wallet")
         ledger_tab = ui.tab("투자이력", icon="receipt_long")
-        rebalance_tab = ui.tab("리밸런싱", icon="notifications")
+        rebalance_tab = ui.tab("목표 비교", icon="compare_arrows")
     with ui.tab_panels(tabs, value=overview_tab).classes("w-full dashboard-panels"):
         with ui.tab_panel(overview_tab):
             _render_currency_asset_charts(data)
@@ -1424,10 +1425,14 @@ ui.add_css(
     .section-title { font-size: 1.2rem; font-weight: 800; margin-top: 8px; }
     .metric-grid { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; }
     .metric-card { border-radius: 16px; border: 1px solid #e8ebf2; box-shadow: none;
-      padding: 16px; min-height: 100px; justify-content: center; }
-    .metric-label { color: #737b8c; font-size: .82rem; }
-    .metric-value { color: #222735; font-size: 1.25rem; font-weight: 800; }
+      padding: 14px 16px; min-height: 72px; justify-content: center; }
+    .metric-row { gap: 12px; }
+    .metric-label { color: #737b8c; font-size: .86rem; line-height: 1.35;
+      flex: 1 1 auto; }
+    .metric-value { color: #222735; font-size: 1.08rem; font-weight: 800;
+      text-align: right; white-space: nowrap; flex: 0 0 auto; }
     .dashboard-tabs { overflow-x: auto; flex-wrap: nowrap; }
+    .dashboard-tabs .q-tab { min-width: 88px; padding: 0 10px; }
     .dashboard-panels { border-radius: 18px; border: 1px solid #e8ebf2;
       box-shadow: 0 8px 26px rgba(32,47,79,.05); }
     .dashboard-chart { height: 430px; }
@@ -1468,14 +1473,15 @@ ui.add_css(
       .page-container { padding: 82px 14px 28px; }
       .feature-card { min-height: 230px; }
       .app-header .nav-button { font-size: 0; }
-      .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
-      .metric-card { min-height: 88px; padding: 12px; }
-      .metric-value { font-size: 1.05rem; }
+      .metric-grid { grid-template-columns: 1fr !important; }
+      .metric-card { min-height: 60px; padding: 12px 14px; }
+      .metric-label { font-size: .88rem; }
+      .metric-value { font-size: 1rem; }
       .date-input { min-width: calc(50% - 8px); flex: 1; }
       .strategy-expansion .q-expansion-item__content { padding: 6px 10px 14px; }
       .editor-section { padding: 12px; }
       .dashboard-chart { height: 360px; }
-      .currency-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+      .currency-metric-grid { grid-template-columns: 1fr !important; }
       .result-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
       .rebalance-summary { grid-template-columns: 1fr !important; }
       .editor-fields, .backtest-field-grid {
