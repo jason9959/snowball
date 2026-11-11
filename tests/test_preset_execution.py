@@ -8,6 +8,8 @@ from snowball.data.prices import PriceBundle
 from snowball.domestic import DOMESTIC_EXECUTION_MAP
 from snowball.presets import PRESETS
 from snowball.service import (
+    _blend_history,
+    _simulate_blended_portfolio,
     run_blended_presets,
     run_domestic_blended_presets,
     run_domestic_preset,
@@ -77,6 +79,36 @@ class PresetExecutionTests(unittest.TestCase):
         total = sum(float(item.rsplit(" ", 1)[1].rstrip("%")) for item in selected.split(", "))
         self.assertAlmostEqual(total, 100.0)
         self.assertGreater(float(blended["nav"].iloc[-1]), 0.0)
+
+    def test_optimized_blend_matches_full_component_simulation(self):
+        start = dt.date(2010, 1, 1)
+        end = dt.date(2012, 12, 31)
+        first = run_preset(
+            PRESETS["1. 분산투자 방어형"], self.bundle, self.market_data, start, end,
+        )
+        second = run_preset(
+            PRESETS["2. 집중투자 공격형"], self.bundle, self.market_data, start, end,
+        )
+        history = _blend_history(first["history"], second["history"], 0.5)
+        common_start = max(first["common_start"], second["common_start"])
+        common_end = min(first["common_end"], second["common_end"])
+        evaluation_index = self.bundle.adjusted_close.index[
+            (self.bundle.adjusted_close.index >= common_start)
+            & (self.bundle.adjusted_close.index <= common_end)
+        ]
+        expected_nav, _, expected_history, _ = _simulate_blended_portfolio(
+            history, self.bundle, evaluation_index, 10_000.0, 0.0,
+        )
+        optimized = run_blended_presets(
+            PRESETS["1. 분산투자 방어형"], PRESETS["2. 집중투자 공격형"], 0.5,
+            self.bundle, self.market_data, start, end,
+        )
+        pd.testing.assert_series_equal(optimized["nav"], expected_nav)
+        pd.testing.assert_frame_equal(
+            optimized["history"].reset_index(drop=True),
+            expected_history.reset_index(drop=True),
+            check_dtype=False,
+        )
 
     def test_blend_endpoints_match_their_component_nav(self):
         for weight, preset_name in ((1.0, "1. 분산투자 방어형"), (0.0, "2. 집중투자 공격형")):

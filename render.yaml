@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: cinema9959
+    name: sb9959
     runtime: docker
     plan: free
     healthCheckPath: /healthz

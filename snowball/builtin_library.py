@@ -81,6 +81,22 @@ def get_builtin_spec(title: str) -> BuiltinPresetSpec:
         raise ValueError(f"알 수 없는 기본 프리셋: {title}") from error
 
 
+def individual_builtin_specs() -> dict[str, BuiltinPresetSpec]:
+    """Return only presets that represent one independently editable strategy."""
+    return {
+        title: spec for title, spec in BUILTIN_PRESET_SPECS.items()
+        if spec.secondary is None
+    }
+
+
+def builtin_user_preset(title: str) -> UserPreset:
+    """Expose an individual built-in through the portable user-preset shape."""
+    spec = get_builtin_spec(title)
+    if spec.secondary is not None:
+        raise ValueError("결합 프리셋은 혼합 구성 전략으로 선택할 수 없습니다.")
+    return UserPreset(spec.title, spec.primary, spec.domestic_execution)
+
+
 def run_builtin_backtest(
     title: str,
     start_date: dt.date,
@@ -210,6 +226,75 @@ def run_user_backtest(
         record.strategy, signal_bundle, execution_bundle, market,
         start_date, end_date, initial_investment=initial_investment,
         transaction_cost_rate=transaction_cost_rate, preset_name=record.title,
+    )
+    _attach_data_snapshot(result, execution_bundle, market, market_data_mode)
+    return result, execution_bundle
+
+
+def run_mixed_backtest(
+    first: UserPreset,
+    second: UserPreset,
+    first_weight: float,
+    start_date: dt.date,
+    end_date: dt.date,
+    *,
+    initial_investment: float,
+    transaction_cost_rate: float = 0.0,
+    market_data_mode: str = "fixed",
+    price_loader: Callable[[tuple[str, ...], pd.Timestamp, pd.Timestamp], PriceBundle] = download_yahoo_prices,
+    market_loader: Callable[..., dict[str, pd.Series]] = load_strategy_market_data,
+) -> tuple[dict, PriceBundle]:
+    """Run two saved individual strategies as one periodically rebalanced portfolio."""
+    first.validate()
+    second.validate()
+    if first.domestic_execution != second.domestic_execution:
+        raise ValueError("미국 실행형과 국내 실행형 프리셋은 서로 혼합할 수 없습니다.")
+    if first.title == second.title:
+        raise ValueError("서로 다른 두 프리셋을 선택해 주세요.")
+    if not 0.0 <= first_weight <= 1.0:
+        raise ValueError("첫 번째 프리셋 비중은 0~100% 범위여야 합니다.")
+    if start_date >= end_date:
+        raise ValueError("시작일은 종료일보다 앞서야 합니다.")
+
+    warmup = pd.Timestamp(start_date) - pd.DateOffset(months=18)
+    symbols = tuple(dict.fromkeys(
+        first.strategy.symbols + second.strategy.symbols + ("QQQ",)
+    ))
+    signal_bundle = price_loader(symbols, warmup, pd.Timestamp(end_date))
+    signals = tuple(dict.fromkeys(
+        first.strategy.market_signals + second.strategy.market_signals
+    ))
+    signal_end = (pd.Timestamp(end_date).to_period("M") - 1).to_timestamp("M")
+    market = market_loader(
+        signals, warmup.date().isoformat(), end_date.isoformat(),
+        mode=market_data_mode, signal_end_iso=signal_end.date().isoformat(),
+    )
+    title = f"{first.title} + {second.title} 혼합"
+
+    if not first.domestic_execution:
+        result = run_blended_presets(
+            first.strategy, second.strategy, first_weight, signal_bundle, market,
+            start_date, end_date, initial_investment=initial_investment,
+            transaction_cost_rate=transaction_cost_rate, preset_name=title,
+            first_label=first.title, second_label=second.title,
+        )
+        _attach_data_snapshot(result, signal_bundle, market, market_data_mode)
+        return result, signal_bundle
+
+    execution_us = tuple(dict.fromkeys(
+        first.strategy.attack_tickers + first.strategy.defense_tickers
+        + second.strategy.attack_tickers + second.strategy.defense_tickers
+        + ("QQQ",)
+    ))
+    execution_bundle = price_loader(
+        domestic_symbols(execution_us), warmup, pd.Timestamp(end_date),
+    )
+    result = run_domestic_blended_presets(
+        first.strategy, second.strategy, first_weight, signal_bundle,
+        execution_bundle, market, start_date, end_date,
+        initial_investment=initial_investment,
+        transaction_cost_rate=transaction_cost_rate,
+        preset_name=title, first_label=first.title, second_label=second.title,
     )
     _attach_data_snapshot(result, execution_bundle, market, market_data_mode)
     return result, execution_bundle

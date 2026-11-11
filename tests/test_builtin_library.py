@@ -6,8 +6,11 @@ import pandas as pd
 
 from snowball.builtin_library import (
     BUILTIN_PRESET_SPECS,
+    builtin_user_preset,
     get_builtin_spec,
+    individual_builtin_specs,
     run_builtin_backtest,
+    run_mixed_backtest,
     run_user_backtest,
 )
 from snowball.data.prices import PriceBundle
@@ -33,6 +36,13 @@ class BuiltinLibraryTests(unittest.TestCase):
     def test_unknown_title_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "알 수 없는"):
             get_builtin_spec("없는 프리셋")
+
+    def test_individual_library_excludes_fixed_combined_presets(self):
+        individual = individual_builtin_specs()
+        self.assertIn("1. 분산투자 방어형", individual)
+        self.assertIn("2. 집중투자 공격형", individual)
+        self.assertNotIn("3. 프리셋 결합", individual)
+        self.assertTrue(all(spec.secondary is None for spec in individual.values()))
 
     def test_combined_runner_uses_explicit_prior_signal_month(self):
         symbols = sorted({
@@ -101,6 +111,41 @@ class BuiltinLibraryTests(unittest.TestCase):
         self.assertEqual(result["data_snapshot"]["market_data_mode"], "fixed")
         self.assertIs(returned_bundle, bundle)
         self.assertFalse(result["nav"].empty)
+
+    def test_selected_preset_mix_matches_fixed_preset_three(self):
+        first = builtin_user_preset("1. 분산투자 방어형")
+        second = builtin_user_preset("2. 집중투자 공격형")
+        symbols = tuple(dict.fromkeys(
+            first.strategy.symbols + second.strategy.symbols + ("QQQ",)
+        ))
+        index = pd.bdate_range("2008-01-01", "2012-12-31")
+        prices = pd.DataFrame({
+            symbol: 100.0 * np.exp(np.arange(len(index)) * (0.0001 + offset * 0.000001))
+            for offset, symbol in enumerate(symbols)
+        }, index=index)
+        bundle = PriceBundle(prices, prices.copy(), source="synthetic")
+
+        def market_loader(signals, start_iso, end_iso, *, mode, signal_end_iso):
+            monthly = pd.date_range("2007-01-31", "2012-12-31", freq="ME")
+            return {
+                "SP500_DIV_YIELD": pd.Series(5.0, index=monthly),
+                "T10Y3M": pd.Series(1.0, index=monthly),
+            }
+
+        fixed, _ = run_builtin_backtest(
+            "3. 프리셋 결합", dt.date(2010, 1, 1), dt.date(2011, 12, 31),
+            initial_investment=10_000,
+            price_loader=lambda symbols, start, end: bundle,
+            market_loader=market_loader,
+        )
+        selected, _ = run_mixed_backtest(
+            first, second, 0.5, dt.date(2010, 1, 1), dt.date(2011, 12, 31),
+            initial_investment=10_000,
+            price_loader=lambda symbols, start, end: bundle,
+            market_loader=market_loader,
+        )
+        pd.testing.assert_series_equal(selected["nav"], fixed["nav"])
+        self.assertEqual(selected["sleeve_labels"], (first.title, second.title))
 
 
 if __name__ == "__main__":

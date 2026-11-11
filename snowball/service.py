@@ -23,6 +23,7 @@ def run_preset(
     *,
     initial_investment: float = 10_000.0,
     transaction_cost_rate: float = 0.0,
+    decisions_only: bool = False,
 ) -> dict:
     if start_date >= end_date:
         raise ValueError("시작일은 종료일보다 앞서야 합니다.")
@@ -34,6 +35,8 @@ def run_preset(
     )
     config["execution_prices"] = prices.adjusted_open
     config["_market_data"] = dict(market_data)
+    if decisions_only:
+        config["_decisions_only"] = True
     result = run_backtest(prices.adjusted_close, config)
     result["metrics"] = summarize_nav(result["nav"])
     result["preset_name"] = preset.name
@@ -234,6 +237,7 @@ def _display_config(config: dict) -> dict:
     copy = dict(config)
     copy.pop("execution_prices", None)
     copy.pop("_market_data", None)
+    copy.pop("_decisions_only", None)
     return copy
 
 
@@ -330,22 +334,32 @@ def run_blended_presets(
         first, prices, market_data, start_date, end_date,
         initial_investment=initial_investment,
         transaction_cost_rate=transaction_cost_rate,
+        decisions_only=True,
     )
     second_result = run_preset(
         second, prices, market_data, start_date, end_date,
         initial_investment=initial_investment,
         transaction_cost_rate=transaction_cost_rate,
+        decisions_only=True,
     )
-    navs = pd.concat(
-        [first_result["nav"].rename("first"), second_result["nav"].rename("second")],
-        axis=1, join="inner",
-    ).dropna()
+    common_start = max(
+        pd.Timestamp(first_result["common_start"]),
+        pd.Timestamp(second_result["common_start"]),
+    )
+    common_end = min(
+        pd.Timestamp(first_result["common_end"]),
+        pd.Timestamp(second_result["common_end"]),
+    )
+    evaluation_index = prices.adjusted_close.index[
+        (prices.adjusted_close.index >= common_start)
+        & (prices.adjusted_close.index <= common_end)
+    ]
     history = _blend_history(
         first_result["history"], second_result["history"], first_weight,
         first_label, second_label,
     )
     nav, blended_values, history, annual_turnover = _simulate_blended_portfolio(
-        history, prices, navs.index, initial_investment, transaction_cost_rate,
+        history, prices, evaluation_index, initial_investment, transaction_cost_rate,
     )
     drawdown = (nav / nav.cummax() - 1.0).rename("포트폴리오")
     final_weights: dict[str, float] = {}
@@ -429,6 +443,9 @@ def run_domestic_blended_presets(
     *,
     initial_investment: float = 10_000_000.0,
     transaction_cost_rate: float = 0.0,
+    preset_name: str = "6. 국내 프리셋 결합",
+    first_label: str = "프리셋 1",
+    second_label: str = "프리셋 2",
 ) -> dict:
     """Domestic execution counterpart of preset 3."""
     domestic_symbols(
@@ -439,8 +456,9 @@ def run_domestic_blended_presets(
         first, second, first_weight, signal_prices, market_data, start_date, end_date,
         initial_investment=initial_investment,
         transaction_cost_rate=transaction_cost_rate,
+        preset_name=preset_name, first_label=first_label, second_label=second_label,
     )
     return _run_domestic_from_signal_result(
         signal_result, execution_prices, start_date, end_date,
-        initial_investment, transaction_cost_rate, "6. 국내 프리셋 결합",
+        initial_investment, transaction_cost_rate, preset_name,
     )

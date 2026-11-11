@@ -771,8 +771,12 @@ def run_backtest(prices: pd.DataFrame, config: dict[str, Any]) -> dict[str, Any]
     previous_attack: set[str] = set()
     previous_defense: set[str] = set()
     turnover_sum = 0.0
+    decisions_only = bool(config.get("_decisions_only", False))
+    iteration_index = (
+        pd.DatetimeIndex(schedule_map.keys()) if decisions_only else evaluation_index
+    )
 
-    for date in evaluation_index:
+    for date in iteration_index:
         contribution = float(config["contribution_amount"]) if date in contribution_dates else 0.0
         if contribution:
             cash += contribution
@@ -976,10 +980,10 @@ def run_backtest(prices: pd.DataFrame, config: dict[str, Any]) -> dict[str, Any]
         flows.append(contribution)
         nav_returns.append(period_return)
 
-    value_series = pd.Series(values, index=evaluation_index, name="포트폴리오 평가액")
-    invested_series = pd.Series(invested, index=evaluation_index, name="누적 투입금")
-    flow_series = pd.Series(flows, index=evaluation_index, name="외부 현금흐름")
-    nav = (1.0 + pd.Series(nav_returns, index=evaluation_index).fillna(0.0)).cumprod()
+    value_series = pd.Series(values, index=iteration_index, name="포트폴리오 평가액")
+    invested_series = pd.Series(invested, index=iteration_index, name="누적 투입금")
+    flow_series = pd.Series(flows, index=iteration_index, name="외부 현금흐름")
+    nav = (1.0 + pd.Series(nav_returns, index=iteration_index).fillna(0.0)).cumprod()
     # The first observation is the initial capital after execution at the
     # applied day's open, marked at that day's close. Do not overwrite it with
     # 1.0 or the first open-to-close return disappears from NAV/month one.
