@@ -1,0 +1,14 @@
+8번 인플레이션 나침반 수정본
+
+통합 프로젝트에서 아래 폴더 전체를 교체하세요:
+features/feature08_inflation/
+
+핵심 변경:
+- 앱 실행/백테스트 중 FRED/Yahoo 실시간 다운로드 제거
+- 원본 data/prices.csv, data/T5YIE.csv 사용
+- 원본 results/summary.csv, results/report.html 포함
+- 원본 전략 이해하기 / 전략 백테스트 / 검증 결과 살펴보기 유지
+- 8번 첫 화면에서 기능선택 화면으로 돌아가기 추가
+- 조건 화면: 조건 초기화 + 뒤로 / 테스트 실행
+- 결과 화면: 조건으로 돌아가기 / 결과 저장
+- manifest.json 미포함 시 안전하게 안내

@@ -11,6 +11,7 @@ from common.snowball.styles import APP_CSS
 from features.snowball01_individual_backtest import page as _snowball01_page  # noqa: F401
 from features.snowball02_portfolio_mix import page as _snowball02_page  # noqa: F401
 from features.snowball03_account_dashboard import page as _snowball03_page  # noqa: F401
+from features.functions_nicegui import page as _functions_page  # noqa: F401
 
 
 @app.get("/healthz")

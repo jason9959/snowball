@@ -7,16 +7,10 @@ separate until a future integration explicitly chooses an adapter.
 
 from __future__ import annotations
 
-import os
-from urllib.parse import quote
-
 from nicegui import ui
 
 
 APP_TITLE = "Snowball Portfolio Lab"
-FUNCTIONS_APP_URL = os.getenv(
-    "FUNCTIONS_APP_URL", "https://cinema99592.streamlit.app"
-).rstrip("/")
 
 FUNCTION_TOOLS = (
     ("show_chart", "1. 상대 수익률 비교", "여러 종목을 같은 기준값으로 비교합니다.", "return_comparison"),
@@ -63,30 +57,31 @@ def feature_card(
     target: str,
 ) -> None:
     with ui.card().classes("feature-card w-full"):
-        with ui.row().classes("items-center gap-3"):
+        with ui.row().classes("feature-card-row items-center gap-4 no-wrap w-full"):
             ui.icon(icon).classes("feature-icon")
-            ui.label(title).classes("text-xl font-bold")
-        ui.label(description).classes("feature-description")
-        ui.button(
-            button_text,
-            icon="arrow_forward",
-            on_click=lambda: ui.navigate.to(target),
-        ).classes("primary-action w-full")
+            with ui.column().classes("feature-card-copy gap-1 min-w-0"):
+                ui.label(title).classes("text-xl font-bold")
+                ui.label(description).classes("feature-description")
+            ui.button(
+                button_text,
+                icon="arrow_forward",
+                on_click=lambda: ui.navigate.to(target),
+            ).classes("primary-action feature-row-action")
 
 
 def functions_card(icon: str, title: str, description: str, feature_id: str) -> None:
-    target = f"{FUNCTIONS_APP_URL}/?feature={quote(feature_id)}"
+    target = f"/functions/{feature_id}"
     with ui.card().classes("function-card w-full"):
-        with ui.row().classes("items-center gap-3 no-wrap"):
+        with ui.row().classes("function-card-row items-center gap-4 no-wrap w-full"):
             ui.icon(icon).classes("function-icon")
-            with ui.column().classes("gap-1 min-w-0"):
+            with ui.column().classes("function-card-copy gap-1 min-w-0"):
                 ui.label(title).classes("text-base font-bold")
                 ui.label(description).classes("function-description")
-        ui.button(
-            "기능 열기",
-            icon="open_in_new",
-            on_click=lambda: ui.navigate.to(target),
-        ).props("flat").classes("function-action w-full")
+            ui.button(
+                "기능 열기",
+                icon="arrow_forward",
+                on_click=lambda: ui.navigate.to(target),
+            ).props("flat").classes("function-action")
 
 
 @ui.page("/")
@@ -97,7 +92,7 @@ def home_page() -> None:
         ui.label(
             "기존 functions 기능과 분리된 Snowball 전용 도구입니다. 통합 시에도 별도 구역으로 표시됩니다."
         ).classes("page-subtitle")
-        with ui.grid(columns=3).classes("feature-grid w-full gap-4"):
+        with ui.grid(columns=1).classes("feature-grid w-full gap-3"):
             feature_card(
                 "query_stats", "Snowball 01 · 개별 백테스트",
                 "한 개의 동적자산배분 전략을 편집하고 장기 성과를 검증합니다.",
@@ -117,8 +112,8 @@ def home_page() -> None:
         ui.separator().classes("my-3")
         ui.label("Functions 투자 도구").classes("page-title section-heading")
         ui.label(
-            "기존 계산 소스를 유지한 채 각 기능으로 바로 연결합니다. 화면은 이후 NiceGUI로 순차 이관합니다."
+            "Functions 계산 소스를 Snowball 저장소로 옮겨 NiceGUI 화면에서 직접 실행합니다."
         ).classes("page-subtitle")
-        with ui.grid(columns=3).classes("functions-grid w-full gap-3"):
+        with ui.grid(columns=1).classes("functions-grid w-full gap-2"):
             for icon, title, description, feature_id in FUNCTION_TOOLS:
                 functions_card(icon, title, description, feature_id)

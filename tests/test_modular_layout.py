@@ -47,6 +47,24 @@ class ModularLayoutTests(unittest.TestCase):
         for name in ("layout.py", "styles.py", "backtest_results.py", "preset_store.py"):
             self.assertTrue((common / name).is_file())
 
+    def test_all_functions_sources_and_native_route_are_local(self):
+        for number in range(1, 16):
+            matches = list((ROOT / "features").glob(f"feature{number:02d}_*"))
+            self.assertEqual(len(matches), 1, f"feature{number:02d} source folder")
+        layout = (ROOT / "common" / "snowball" / "layout.py").read_text(encoding="utf-8")
+        self.assertIn('target = f"/functions/{feature_id}"', layout)
+        self.assertNotIn("streamlit.app", layout)
+        route = (ROOT / "features" / "functions_nicegui" / "page.py").read_text(encoding="utf-8")
+        self.assertIn('@ui.page("/functions/{feature_id}")', route)
+        for feature_id in (
+            "return_comparison", "periodic_returns", "portfolio_backtest",
+            "dynamic_portfolio", "allocation_sweep", "monte_carlo_normal",
+            "monte_carlo_bootstrap", "inflation_compass", "dollar_compass",
+            "financial_dashboard", "moving_average", "laoer_infinite",
+            "real_estate_vs_stock", "fear_greed_rebalance", "reb_statistics",
+        ):
+            self.assertIn(f'"{feature_id}"', route)
+
 
 if __name__ == "__main__":
     unittest.main()

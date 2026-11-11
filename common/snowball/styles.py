@@ -11,18 +11,21 @@ APP_CSS = r"""
     .page-back-button { align-self: flex-start; color: #4f5b70; margin-left: -10px; }
     .feature-card, .account-card, .migration-note { border-radius: 20px; border: 1px solid #e8ebf2;
       box-shadow: 0 8px 26px rgba(32,47,79,.06); padding: 22px; }
-    .feature-card { min-height: 260px; justify-content: space-between; }
+    .feature-card { min-height: 112px; padding: 18px 20px; }
+    .feature-card-row, .function-card-row { min-width: 0; }
+    .feature-card-copy, .function-card-copy { flex: 1 1 auto; }
     .feature-icon { font-size: 38px; color: #4059df; background: #eef1ff;
       padding: 10px; border-radius: 14px; }
-    .feature-description { color: #687080; line-height: 1.65; min-height: 52px; }
+    .feature-description { color: #687080; line-height: 1.55; }
     .primary-action { border-radius: 12px; min-height: 46px; }
+    .feature-row-action { flex: 0 0 auto; min-width: 150px; }
     .section-heading { margin-top: 8px; font-size: clamp(1.35rem, 3vw, 1.8rem); }
-    .function-card { min-height: 178px; justify-content: space-between; border-radius: 16px;
-      border: 1px solid #e8ebf2; box-shadow: 0 5px 18px rgba(32,47,79,.045); padding: 18px; }
+    .function-card { min-height: 84px; border-radius: 16px; border: 1px solid #e8ebf2;
+      box-shadow: 0 5px 18px rgba(32,47,79,.045); padding: 14px 18px; }
     .function-icon { flex: 0 0 auto; font-size: 28px; color: #5966c9; background: #f0f2ff;
       padding: 8px; border-radius: 12px; }
     .function-description { color: #737b8c; font-size: .86rem; line-height: 1.5; }
-    .function-action { justify-content: flex-start; color: #4059df; min-height: 40px; }
+    .function-action { flex: 0 0 auto; color: #4059df; min-height: 40px; min-width: 110px; }
     .migration-note { background: linear-gradient(135deg, #f6f8ff, #fff); }
     .status-text { color: #687080; font-size: .85rem; }
     .error-card { border: 1px solid #ffcdd2; background: #fff7f8; border-radius: 16px; }
@@ -80,8 +83,11 @@ APP_CSS = r"""
       .feature-grid { grid-template-columns: 1fr !important; }
       .functions-grid { grid-template-columns: 1fr !important; }
       .page-container { padding: 82px 14px 28px; }
-      .feature-card { min-height: 230px; }
-      .function-card { min-height: 150px; }
+      .feature-card { min-height: 0; padding: 15px; }
+      .function-card { min-height: 0; padding: 13px 14px; }
+      .feature-row-action, .function-action { min-width: 44px; width: 44px; font-size: 0; padding: 0; }
+      .feature-icon { font-size: 30px; padding: 8px; }
+      .function-icon { font-size: 24px; padding: 7px; }
       .app-header .nav-button { font-size: 0; }
       .metric-grid { grid-template-columns: 1fr !important; }
       .metric-card { min-height: 60px; padding: 12px 14px; }

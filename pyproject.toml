@@ -16,6 +16,13 @@ dependencies = [
   "exchange-calendars>=4.5,<5",
   "gspread>=6,<7",
   "google-auth>=2.35,<3",
+  "matplotlib>=3.8,<4",
+  "altair>=5,<7",
+  "plotly>=5.20,<7",
+  "requests>=2.31,<3",
+  "python-dateutil>=2.9,<3",
+  "openpyxl>=3.1,<4",
+  "xlrd>=2,<3",
 ]
 
 [project.scripts]

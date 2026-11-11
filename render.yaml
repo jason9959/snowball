@@ -13,5 +13,3 @@ services:
         sync: false
       - key: MATPLOTLIB
         value: "false"
-      - key: FUNCTIONS_APP_URL
-        value: https://cinema99592.streamlit.app
