@@ -53,13 +53,14 @@ class FunctionsAnalyticsTests(unittest.TestCase):
     def test_fixed_allocation_and_monte_carlo_options(self):
         with patch("common.functions.analytics.prices", side_effect=self._prices):
             sweep = allocation_sweep(
-                ["SPY", "IEF", "GLD"], self.start, self.end, 10,
+                ["SPY", "IEF", "GLD"], self.start, self.end, 5,
                 fixed_index=0, fixed_ratio=40,
             )
             simulated = monte_carlo(
                 "SPY", self.start, self.end, 2, 100, 10_000, "bootstrap", 100,
             )
-        self.assertTrue((sweep.table["SPY"] == 40).all())
+        self.assertTrue((sweep.table["SPY 비율"] == 40).all())
+        self.assertEqual(len(sweep.table), 13)
         self.assertIn("총 예정 투입금", simulated.metrics)
 
 

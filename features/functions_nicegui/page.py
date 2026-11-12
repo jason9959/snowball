@@ -239,34 +239,55 @@ def functions_page(feature_id: str) -> None:
                 ui.label("자산과 탐색 간격").classes("section-title")
                 with ui.row().classes("backtest-field-grid w-full"):
                     tickers = ui.input("종목 2~3개(쉼표 구분)", value="SPY,IEF")
-                    step = ui.select([5, 10, 20, 25], value=10, label="비중 간격(%)")
+                    step = ui.select([5, 10, 20], value=10, label="비중 간격(%)")
+                    rebalance = ui.select(["매일", "매월", "매분기", "매년"], value="매일", label="리밸런싱 주기")
+                    initial = ui.number("기준 투자금", value=10_000, min=1)
                 fixed = ui.checkbox("한 종목 비중 고정", value=False)
                 with ui.row().classes("backtest-field-grid w-full") as fixed_fields:
                     fixed_index = ui.number("고정할 종목 순번", value=1, min=1, max=3)
                     fixed_ratio = ui.number("고정 비중(%)", value=40, min=0, max=100, step=5)
                 fixed_fields.set_visibility(False)
-                fixed.on_value_change(lambda _: fixed_fields.set_visibility(bool(fixed.value)))
-                getter = lambda: allocation_sweep(
-                    _tickers(tickers.value), _date(start.value), _date(end.value), int(step.value),
-                    int(fixed_index.value) - 1 if fixed.value else None,
-                    int(fixed_ratio.value) if fixed.value else None,
-                )
+
+                def toggle_fixed() -> None:
+                    fixed_fields.set_visibility(bool(fixed.value))
+                    step.set_enabled(not bool(fixed.value))
+
+                fixed.on_value_change(lambda _: toggle_fixed())
+
+                def allocation_result() -> ToolResult:
+                    selected = _tickers(tickers.value)
+                    if fixed.value and len(selected) != 3:
+                        raise ValueError("고정 비중은 종목 3개일 때 사용할 수 있습니다.")
+                    ratio = int(fixed_ratio.value)
+                    if fixed.value and ratio % 5:
+                        raise ValueError("고정 비중은 5% 단위로 입력해 주세요.")
+                    return allocation_sweep(
+                        selected, _date(start.value), _date(end.value), 5 if fixed.value else int(step.value),
+                        int(fixed_index.value) - 1 if fixed.value else None,
+                        ratio if fixed.value else None,
+                        str(rebalance.value), float(initial.value),
+                    )
+
+                getter = allocation_result
             elif feature_id in {"monte_carlo_normal", "monte_carlo_bootstrap"}:
                 ui.label("시뮬레이션 설정").classes("section-title")
                 with ui.row().classes("backtest-field-grid w-full"):
                     ticker = ui.input("종목", value="SPY")
-                    years = ui.number("예측 기간(년)", value=10, min=1, max=50)
+                    years = ui.number("예측 기간(년)", value=10, min=0.5, max=50, step=0.5)
                     simulations = ui.number("시뮬레이션 수", value=1000, min=100, max=10000)
                     initial = ui.number("초기 투자금", value=10_000, min=1)
                 recurring = ui.checkbox("적립식 포함", value=False)
-                monthly = ui.number("월 적립금", value=500, min=0).classes("control-grow")
-                monthly.set_visibility(False)
-                recurring.on_value_change(lambda _: monthly.set_visibility(bool(recurring.value)))
+                with ui.row().classes("backtest-field-grid w-full") as recurring_fields:
+                    recurring_amount = ui.number("정기 적립금", value=500, min=0)
+                    contribution_frequency = ui.select(["매월", "매분기", "매년"], value="매월", label="적립 주기")
+                recurring_fields.set_visibility(False)
+                recurring.on_value_change(lambda _: recurring_fields.set_visibility(bool(recurring.value)))
                 method = "normal" if feature_id.endswith("normal") else "bootstrap"
                 getter = lambda: monte_carlo(
-                    str(ticker.value), _date(start.value), _date(end.value), int(years.value),
+                    str(ticker.value), _date(start.value), _date(end.value), float(years.value),
                     int(simulations.value), float(initial.value), method,
-                    float(monthly.value) if recurring.value else 0.0,
+                    float(recurring_amount.value) if recurring.value else 0.0,
+                    str(contribution_frequency.value),
                 )
             elif feature_id == "inflation_compass":
                 ui.label("나침반 판정 기준").classes("section-title")
