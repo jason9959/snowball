@@ -4,6 +4,10 @@ from pathlib import Path
 import pandas as pd
 
 from features.snowball04_split_trading.engine import SplitTradingConfig, run_split_backtest
+from features.snowball04_split_trading.optimization import (
+    run_ratio_sweep,
+    run_tranche_sweep,
+)
 from features.snowball04_split_trading.sheets import export_result
 
 
@@ -12,6 +16,36 @@ def closes(values):
 
 
 class SplitTradingTests(unittest.TestCase):
+    def test_drawdown_metrics_are_included(self):
+        result = run_split_backtest(
+            closes([100, 80, 120]),
+            SplitTradingConfig(300, 100, .10, .10),
+        )
+        self.assertAlmostEqual(result["full_max_drawdown"], -.20)
+        self.assertAlmostEqual(result["full_current_drawdown"], 0.0)
+        self.assertEqual(str(result["full_mdd_peak_date"]), "2026-01-02")
+        self.assertEqual(str(result["full_mdd_trough_date"]), "2026-01-05")
+        self.assertEqual(str(result["full_mdd_recovery_date"]), "2026-01-06")
+
+    def test_ratio_sweep_ranks_every_combination(self):
+        optimization = run_ratio_sweep(
+            closes([100, 130, 90, 120]),
+            SplitTradingConfig(300, 100, .10, .10),
+            [.05, .10], [.05, .10], "return",
+        )
+        self.assertEqual(len(optimization["runs"]), 4)
+        self.assertEqual(optimization["table"]["순위"].tolist(), [1, 2, 3, 4])
+        self.assertIs(optimization["best"], optimization["runs"][0]["result"])
+
+    def test_tranche_sweep_supports_count_or_amount_candidates(self):
+        optimization = run_tranche_sweep(
+            closes([100, 80, 120]),
+            SplitTradingConfig(300, 300, .10, .10),
+            [("2회", 150), ("3회", 100)], "mdd",
+        )
+        self.assertEqual(set(optimization["table"]["분할 조건"]), {"2회", "3회"})
+        self.assertIn("MDD", optimization["table"].columns)
+
     def test_page_persists_form_and_uses_direct_currency_inputs(self):
         source = (
             Path(__file__).resolve().parents[1]
@@ -78,6 +112,13 @@ class SplitTradingTests(unittest.TestCase):
             run_split_backtest(
                 closes([60, 54]),
                 SplitTradingConfig(100, 50, .10, .10, "whole"),
+            )
+
+    def test_excessive_slot_count_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "1,000차"):
+            run_split_backtest(
+                closes([100, 90]),
+                SplitTradingConfig(10_000, 1, .10, .10),
             )
 
     def test_sheet_export_uses_next_available_number_and_numeric_cells(self):

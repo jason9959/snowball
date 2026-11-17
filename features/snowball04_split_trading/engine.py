@@ -35,6 +35,8 @@ class SplitTradingConfig:
             raise ValueError("매도 상승률은 0%보다 커야 합니다.")
         if self.quantity_mode not in {"whole", "fractional_6"}:
             raise ValueError("지원하지 않는 수량 방식입니다.")
+        if self.max_slots > 1_000:
+            raise ValueError("동시 보유 차수는 최대 1,000차까지 계산할 수 있습니다.")
 
     @property
     def max_slots(self) -> int:
@@ -65,6 +67,26 @@ def _close_series(closes: pd.Series) -> pd.Series:
     if (series <= 0).any():
         raise ValueError("가격은 0보다 커야 합니다.")
     return series
+
+
+def _drawdown_metrics(nav: pd.Series) -> dict[str, object]:
+    running_peak = nav.cummax()
+    drawdown = nav / running_peak - 1.0
+    trough_date = pd.Timestamp(drawdown.idxmin())
+    peak_date = pd.Timestamp(nav.loc[:trough_date].idxmax())
+    peak_value = float(nav.loc[peak_date])
+    recovered = nav.loc[trough_date:]
+    recovered = recovered[recovered >= peak_value - 1e-9]
+    recovery_date = pd.Timestamp(recovered.index[0]) if not recovered.empty else None
+    end_date = recovery_date or pd.Timestamp(nav.index[-1])
+    return {
+        "max_drawdown": float(drawdown.min()),
+        "current_drawdown": float(drawdown.iloc[-1]),
+        "mdd_peak_date": peak_date.date(),
+        "mdd_trough_date": trough_date.date(),
+        "mdd_recovery_date": recovery_date.date() if recovery_date is not None else None,
+        "mdd_duration_days": int((end_date - peak_date).days),
+    }
 
 
 def run_split_backtest(closes: pd.Series, config: SplitTradingConfig) -> dict:
@@ -164,7 +186,11 @@ def run_split_backtest(closes: pd.Series, config: SplitTradingConfig) -> dict:
     final_close = float(prices.iloc[-1])
     holdings_value = sum(position.quantity * final_close for position in positions.values())
     trade_frame = pd.DataFrame(trades, columns=TRADE_COLUMNS)
-    return {
+    full_return = float(full_nav.iloc[-1] / config.initial_capital - 1.0)
+    split_return = float(split_nav.iloc[-1] / config.initial_capital - 1.0)
+    full_risk = _drawdown_metrics(full_nav)
+    split_risk = _drawdown_metrics(split_nav)
+    result = {
         "prices": prices,
         "full_nav": full_nav,
         "split_nav": split_nav,
@@ -175,10 +201,21 @@ def run_split_backtest(closes: pd.Series, config: SplitTradingConfig) -> dict:
         "final_holdings_value": holdings_value,
         "full_final": float(full_nav.iloc[-1]),
         "split_final": float(split_nav.iloc[-1]),
-        "full_return": float(full_nav.iloc[-1] / config.initial_capital - 1.0),
-        "split_return": float(split_nav.iloc[-1] / config.initial_capital - 1.0),
+        "full_return": full_return,
+        "split_return": split_return,
         "return_difference": float((split_nav.iloc[-1] - full_nav.iloc[-1]) / config.initial_capital),
         "actual_start": prices.index[0].date(),
         "actual_end": prices.index[-1].date(),
     }
+    result.update({f"full_{key}": value for key, value in full_risk.items()})
+    result.update({f"split_{key}": value for key, value in split_risk.items()})
+    result["full_return_mdd"] = (
+        full_return / abs(float(full_risk["max_drawdown"]))
+        if float(full_risk["max_drawdown"]) < 0 else None
+    )
+    result["split_return_mdd"] = (
+        split_return / abs(float(split_risk["max_drawdown"]))
+        if float(split_risk["max_drawdown"]) < 0 else None
+    )
+    return result
 
