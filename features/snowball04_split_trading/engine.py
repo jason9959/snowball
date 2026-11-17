@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from itertools import count
+import math
 
 import pandas as pd
 
@@ -21,6 +22,7 @@ class SplitTradingConfig:
     tranche_amount: float
     buy_drop: float
     sell_rise: float
+    quantity_mode: str = "fractional_6"
 
     def validate(self) -> None:
         if self.initial_capital <= 0 or self.tranche_amount <= 0:
@@ -31,6 +33,8 @@ class SplitTradingConfig:
             raise ValueError("매수 하락률은 0% 초과 100% 미만이어야 합니다.")
         if self.sell_rise <= 0:
             raise ValueError("매도 상승률은 0%보다 커야 합니다.")
+        if self.quantity_mode not in {"whole", "fractional_6"}:
+            raise ValueError("지원하지 않는 수량 방식입니다.")
 
     @property
     def max_slots(self) -> int:
@@ -43,6 +47,13 @@ class _Position:
     trade_id: str
     price: float
     quantity: float
+
+
+def _order_quantity(budget: float, price: float, mode: str) -> float:
+    raw = budget / price
+    if mode == "whole":
+        return float(math.floor(raw + 1e-12))
+    return math.floor((raw + 1e-12) * 1_000_000) / 1_000_000
 
 
 def _close_series(closes: pd.Series) -> pd.Series:
@@ -82,8 +93,11 @@ def run_split_backtest(closes: pd.Series, config: SplitTradingConfig) -> dict:
         })
 
     current_date = first_date
-    first_quantity = config.tranche_amount / first_price
-    cash -= config.tranche_amount
+    first_quantity = _order_quantity(config.tranche_amount, first_price, config.quantity_mode)
+    if first_quantity <= 0:
+        raise ValueError("회당 매수금액으로 첫 거래일에 1주 이상 매수할 수 없습니다.")
+    first_spend = first_quantity * first_price
+    cash -= first_spend
     first_position = _Position(1, f"T{next(ids):06d}", first_price, first_quantity)
     positions[1] = first_position
     record("매수", 1, first_price, first_position)
@@ -92,7 +106,8 @@ def run_split_backtest(closes: pd.Series, config: SplitTradingConfig) -> dict:
     temporary_base = first_price
     confirmed_base: float | None = None
     split_values: list[float] = []
-    full_quantity = config.initial_capital / first_price
+    full_quantity = _order_quantity(config.initial_capital, first_price, config.quantity_mode)
+    full_cash = config.initial_capital - full_quantity * first_price
 
     for index, (current_date, close) in enumerate(prices.items()):
         close = float(close)
@@ -114,9 +129,13 @@ def run_split_backtest(closes: pd.Series, config: SplitTradingConfig) -> dict:
                         continue
                     if confirmed_base is None:
                         confirmed_base = base
-                    quantity = config.tranche_amount / boundary
+                    quantity = _order_quantity(
+                        config.tranche_amount, boundary, config.quantity_mode,
+                    )
+                    if quantity <= 0:
+                        continue
                     position = _Position(slot, f"T{next(ids):06d}", boundary, quantity)
-                    cash -= config.tranche_amount
+                    cash -= quantity * boundary
                     positions[slot] = position
                     record("매수", slot, boundary, position)
 
@@ -141,7 +160,7 @@ def run_split_backtest(closes: pd.Series, config: SplitTradingConfig) -> dict:
         split_values.append(cash + sum(position.quantity * close for position in positions.values()))
 
     split_nav = pd.Series(split_values, index=prices.index, name="분할매매")
-    full_nav = (prices * full_quantity).rename("전액 투자")
+    full_nav = (prices * full_quantity + full_cash).rename("전액 투자")
     final_close = float(prices.iloc[-1])
     holdings_value = sum(position.quantity * final_close for position in positions.values())
     trade_frame = pd.DataFrame(trades, columns=TRADE_COLUMNS)
@@ -151,6 +170,7 @@ def run_split_backtest(closes: pd.Series, config: SplitTradingConfig) -> dict:
         "split_nav": split_nav,
         "trades": trade_frame,
         "max_slots": slots,
+        "quantity_mode": config.quantity_mode,
         "final_cash": cash,
         "final_holdings_value": holdings_value,
         "full_final": float(full_nav.iloc[-1]),

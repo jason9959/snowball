@@ -79,7 +79,10 @@ def export_result(
         "numberFormat": {"type": "NUMBER", "pattern": money_pattern},
     })
     sheet.format(f"G{first_trade_row}:G{last_trade_row}", {
-        "numberFormat": {"type": "NUMBER", "pattern": "0.000000"},
+        "numberFormat": {
+            "type": "NUMBER",
+            "pattern": "0" if result.get("quantity_mode") == "whole" else "0.000000",
+        },
     })
     for column in ("H", "I", "K"):
         sheet.format(f"{column}{first_trade_row}:{column}{last_trade_row}", {

@@ -32,9 +32,9 @@ class SplitTradingTests(unittest.TestCase):
         self.assertAlmostEqual(frame.iloc[2]["시뮬레이션 체결가"], 113.4)
         self.assertAlmostEqual(frame.iloc[3]["시뮬레이션 체결가"], 124.74)
         self.assertAlmostEqual(frame.iloc[4]["시뮬레이션 체결가"], 138.6)
-        self.assertAlmostEqual(result["final_cash"], 220.0)
-        self.assertAlmostEqual(result["split_final"], 362.0)
-        self.assertAlmostEqual(result["split_return"], 0.2066666667)
+        self.assertAlmostEqual(result["final_cash"], 220.0, places=2)
+        self.assertAlmostEqual(result["split_final"], 362.0, places=2)
+        self.assertAlmostEqual(result["split_return"], 0.2066666667, places=6)
         self.assertAlmostEqual(result["full_final"], 426.0)
 
     def test_remaining_cash_and_slot_count(self):
@@ -43,7 +43,7 @@ class SplitTradingTests(unittest.TestCase):
             SplitTradingConfig(1_000_000, 300_000, .10, .10),
         )
         self.assertEqual(result["max_slots"], 3)
-        self.assertAlmostEqual(result["final_cash"], 100_000)
+        self.assertAlmostEqual(result["final_cash"], 100_000, places=2)
 
     def test_one_slot_only_buys_first_position(self):
         result = run_split_backtest(
@@ -52,6 +52,23 @@ class SplitTradingTests(unittest.TestCase):
         )
         self.assertEqual(len(result["trades"]), 1)
         self.assertAlmostEqual(result["split_final"], 120)
+
+    def test_whole_share_mode_keeps_unspent_budget_as_cash(self):
+        result = run_split_backtest(
+            closes([60, 54]),
+            SplitTradingConfig(200, 100, .10, .10, "whole"),
+        )
+        self.assertEqual(result["trades"]["수량"].tolist(), [1.0, 1.0])
+        self.assertAlmostEqual(result["final_cash"], 86.0)
+        self.assertAlmostEqual(result["split_final"], 194.0)
+        self.assertAlmostEqual(result["full_final"], 182.0)
+
+    def test_whole_share_mode_rejects_too_small_first_budget(self):
+        with self.assertRaisesRegex(ValueError, "1주 이상"):
+            run_split_backtest(
+                closes([60, 54]),
+                SplitTradingConfig(100, 50, .10, .10, "whole"),
+            )
 
     def test_sheet_export_uses_next_available_number_and_numeric_cells(self):
         class Worksheet:

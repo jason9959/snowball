@@ -92,8 +92,9 @@ def _render_result(result: dict, country: str, symbol_label: str) -> None:
         display[column] = display[column].map(
             lambda value: "" if pd.isna(value) else _number(float(value), country)
         )
+    quantity_digits = 0 if result["quantity_mode"] == "whole" else 6
     display["수량"] = display["수량"].map(
-        lambda value: "" if pd.isna(value) else f"{float(value):,.6f}"
+        lambda value: "" if pd.isna(value) else f"{float(value):,.{quantity_digits}f}"
     )
     display["실현수익률"] = display["실현수익률"].map(
         lambda value: "" if pd.isna(value) else f"{float(value):.2%}"
@@ -144,7 +145,13 @@ def split_trading_page() -> None:
                 buy_custom = ui.number("직접 매수 하락률(%)", value=10, min=.01, max=99.99, step=.1).props("outlined").classes("control-grow")
                 sell_preset = ui.select(["직접입력", 5, 10, 15, 20, 25, 30], value=10, label="매도 상승률").props("outlined").classes("control-grow")
                 sell_custom = ui.number("직접 매도 상승률(%)", value=10, min=.01, step=.1).props("outlined").classes("control-grow")
-            ui.checkbox("소수점 매수 허용", value=True).props("disable")
+            quantity_mode = ui.select(
+                {
+                    "whole": "1주 단위 정수 매매",
+                    "fractional_6": "금액 기준 소수점 매매(6자리)",
+                },
+                value="fractional_6", label="수량 방식",
+            ).props("outlined").classes("w-full")
             ui.label("미국 금액 입력값은 센트 단위입니다. 예: 10000 → $100.00").classes("text-xs text-grey-6")
             run_button = ui.button("백테스트 실행", icon="play_arrow").classes("primary-action w-full")
 
@@ -235,7 +242,10 @@ def split_trading_page() -> None:
                     split_input = f"횟수 · {count_value}회"
                 buy = float(buy_custom.value if buy_preset.value == "직접입력" else buy_preset.value) / 100
                 sell = float(sell_custom.value if sell_preset.value == "직접입력" else sell_preset.value) / 100
-                config = SplitTradingConfig(capital, tranche, buy, sell)
+                selected_quantity_mode = str(quantity_mode.value)
+                config = SplitTradingConfig(
+                    capital, tranche, buy, sell, selected_quantity_mode,
+                )
                 symbol = str(symbol_select.value)
                 close = await run.io_bound(load_adjusted_close, symbol, start, end)
                 result = await run.io_bound(run_split_backtest, close, config)
@@ -247,7 +257,11 @@ def split_trading_page() -> None:
                     "최초 투자총액": capital, "분할 방식": split_input,
                     "회당 매수금액": tranche, "매수 하락률": buy,
                     "매도 상승률": sell, "가격 기준": "yfinance auto_adjust 수정종가",
-                    "소수점 매수": "허용", "수수료·세금": 0,
+                    "수량 방식": (
+                        "1주 단위 정수 매매" if selected_quantity_mode == "whole"
+                        else "금액 기준 소수점 매매(6자리)"
+                    ),
+                    "수수료·세금": 0,
                 }
                 state.update(result=result, conditions=conditions, symbol_label=label)
             except Exception as error:
