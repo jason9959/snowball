@@ -63,6 +63,7 @@ def export_result(
         [],
     ])
     trades: pd.DataFrame = result["trades"]
+    trade_header_row = len(rows) + 1
     rows.append(list(trades.columns))
     for row in trades.itertuples(index=False, name=None):
         rows.append(["" if pd.isna(value) else value for value in row])
@@ -71,6 +72,22 @@ def export_result(
     sheet.format("A1:B1", {"textFormat": {"bold": True}, "backgroundColor": {
         "red": .91, "green": .93, "blue": 1.0,
     }})
+    money_pattern = "#,##0" if conditions.get("국가") == "한국" else "#,##0.00"
+    first_trade_row = trade_header_row + 1
+    last_trade_row = max(first_trade_row, first_trade_row + len(trades) - 1)
+    sheet.format(f"F{first_trade_row}:F{last_trade_row}", {
+        "numberFormat": {"type": "NUMBER", "pattern": money_pattern},
+    })
+    sheet.format(f"G{first_trade_row}:G{last_trade_row}", {
+        "numberFormat": {"type": "NUMBER", "pattern": "0.000000"},
+    })
+    for column in ("H", "I", "K"):
+        sheet.format(f"{column}{first_trade_row}:{column}{last_trade_row}", {
+            "numberFormat": {"type": "NUMBER", "pattern": money_pattern},
+        })
+    sheet.format(f"J{first_trade_row}:J{last_trade_row}", {
+        "numberFormat": {"type": "PERCENT", "pattern": "0.00%"},
+    })
     spreadsheet_id = getattr(spreadsheet, "id", "")
     url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/edit#gid={sheet.id}"
     return title, url

@@ -24,6 +24,11 @@ def _actual_money(raw_value: float, country: str) -> float:
     return float(raw_value) if country == "한국" else float(raw_value) / 100.0
 
 
+def _number(value: float, country: str) -> str:
+    """Format market-currency prices and amounts without changing calculations."""
+    return f"{float(value):,.0f}" if country == "한국" else f"{float(value):,.2f}"
+
+
 def _table_columns(names: list[str]) -> list[dict[str, object]]:
     return [{"name": name, "label": name, "field": name, "align": "left", "sortable": True}
             for name in names]
@@ -31,6 +36,7 @@ def _table_columns(names: list[str]) -> list[dict[str, object]]:
 
 def _render_result(result: dict, country: str, symbol_label: str) -> None:
     currency = "KRW" if country == "한국" else "USD"
+    chart_digits = 0 if country == "한국" else 2
     ui.label(f"{symbol_label} 결과").classes("section-title")
     dates = [timestamp.strftime("%Y-%m-%d") for timestamp in result["split_nav"].index]
     buy_points, sell_points = [], []
@@ -39,8 +45,11 @@ def _render_result(result: dict, country: str, symbol_label: str) -> None:
         if day not in result["split_nav"].index:
             continue
         point = {
-            "value": [day.strftime("%Y-%m-%d"), round(float(result["split_nav"].loc[day]), 4)],
-            "name": f"{row['당일 순번']}번 · {row['차수']}차 · {row['시뮬레이션 체결가']:,.2f}",
+            "value": [day.strftime("%Y-%m-%d"), round(float(result["split_nav"].loc[day]), chart_digits)],
+            "name": (
+                f"{row['당일 순번']}번 · {row['차수']}차 · "
+                f"{_number(row['시뮬레이션 체결가'], country)}"
+            ),
         }
         (buy_points if row["매수/매도"] == "매수" else sell_points).append(point)
     ui.echart({
@@ -52,9 +61,9 @@ def _render_result(result: dict, country: str, symbol_label: str) -> None:
         "dataZoom": [{"type": "inside"}],
         "series": [
             {"name": "전액 투자", "type": "line", "showSymbol": False,
-             "data": result["full_nav"].round(4).tolist(), "lineStyle": {"width": 2}},
+             "data": result["full_nav"].round(chart_digits).tolist(), "lineStyle": {"width": 2}},
             {"name": "분할매매", "type": "line", "showSymbol": False,
-             "data": result["split_nav"].round(4).tolist(), "lineStyle": {"width": 3}},
+             "data": result["split_nav"].round(chart_digits).tolist(), "lineStyle": {"width": 3}},
             {"name": "매수", "type": "scatter", "data": buy_points, "symbol": "triangle",
              "symbolSize": 11, "itemStyle": {"color": "#d95c5c"}},
             {"name": "매도", "type": "scatter", "data": sell_points, "symbol": "triangle",
@@ -79,10 +88,13 @@ def _render_result(result: dict, country: str, symbol_label: str) -> None:
                     ui.label(value).classes("metric-value")
     ui.label("체결 내역").classes("section-title")
     display = result["trades"].copy()
-    for column in ("시뮬레이션 체결가", "수량", "체결금액", "실현손익", "체결 후 현금잔액"):
+    for column in ("시뮬레이션 체결가", "체결금액", "실현손익", "체결 후 현금잔액"):
         display[column] = display[column].map(
-            lambda value: "" if pd.isna(value) else f"{float(value):,.4f}"
+            lambda value: "" if pd.isna(value) else _number(float(value), country)
         )
+    display["수량"] = display["수량"].map(
+        lambda value: "" if pd.isna(value) else f"{float(value):,.6f}"
+    )
     display["실현수익률"] = display["실현수익률"].map(
         lambda value: "" if pd.isna(value) else f"{float(value):.2%}"
     )
