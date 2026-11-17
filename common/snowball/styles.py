@@ -39,13 +39,14 @@ APP_CSS = r"""
       padding: 14px 16px; min-height: 72px; justify-content: center; }
     .metric-row { gap: 12px; }
     .metric-label { color: #737b8c; font-size: .86rem; line-height: 1.35;
-      flex: 1 1 auto; }
+      flex: 1 1 auto; white-space: nowrap; word-break: keep-all; }
     .metric-value { color: #222735; font-size: 1.08rem; font-weight: 800;
       text-align: right; white-space: nowrap; flex: 0 0 auto; }
     .dashboard-tabs { overflow-x: auto; flex-wrap: nowrap; }
     .dashboard-tabs .q-tab { min-width: 88px; padding: 0 10px; }
     .dashboard-panels { border-radius: 18px; border: 1px solid #e8ebf2;
       box-shadow: 0 8px 26px rgba(32,47,79,.05); }
+    .result-tab-content { background: white; padding: 18px; min-height: 430px; }
     .dashboard-chart { height: 430px; }
     .currency-asset-card { border-radius: 18px; border: 1px solid #e8ebf2;
       box-shadow: none; padding: 18px; gap: 12px; margin-bottom: 16px; }
@@ -77,7 +78,9 @@ APP_CSS = r"""
     .decision-select { width: min(360px, 100%); }
     .snapshot-code { max-height: 420px; overflow: auto; border-radius: 12px; }
     .control-grow { min-width: 180px; flex: 1; }
-    .result-metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
+    .result-metric-grid { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)) !important; }
+    .monthly-heatmap { height: 510px; }
+    .monthly-distribution { height: 340px; }
     .rebalance-summary { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
     @media (max-width: 700px) {
       .feature-grid { grid-template-columns: 1fr !important; }
@@ -97,8 +100,11 @@ APP_CSS = r"""
       .strategy-expansion .q-expansion-item__content { padding: 6px 10px 14px; }
       .editor-section { padding: 12px; }
       .dashboard-chart { height: 360px; }
+      .result-tab-content { padding: 10px; min-height: 360px; }
       .currency-metric-grid { grid-template-columns: 1fr !important; }
       .result-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+      .monthly-heatmap { height: 480px; }
+      .monthly-distribution { height: 330px; }
       .rebalance-summary { grid-template-columns: 1fr !important; }
       .editor-fields, .backtest-field-grid {
         grid-template-columns: 1fr !important;

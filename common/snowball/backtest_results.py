@@ -4,10 +4,16 @@ from __future__ import annotations
 
 import json
 
+import numpy as np
 import pandas as pd
 from nicegui import ui
 
-from snowball.exports import diagnostic_frames, diagnostic_zip, market_data_export
+from snowball.exports import (
+    diagnostic_frames,
+    diagnostic_zip,
+    market_data_export,
+    monthly_return_export,
+)
 
 
 def _percent(value: float | None) -> str:
@@ -59,6 +65,73 @@ def _monthly_result_table(frame: pd.DataFrame) -> pd.DataFrame:
     return pivot
 
 
+def _monthly_heatmap_options(frame: pd.DataFrame) -> dict:
+    """Build a red/white/green monthly-return heatmap for ECharts."""
+    if frame.empty:
+        return {}
+    months = frame.copy()
+    periods = pd.PeriodIndex(months["적용 월"], freq="M")
+    values = pd.to_numeric(months["수익률 원시값"], errors="coerce") * 100.0
+    years = sorted(set(periods.year))
+    year_positions = {year: index for index, year in enumerate(years)}
+    data = []
+    for period, value in zip(periods, values):
+        if pd.isna(value):
+            continue
+        numeric = round(float(value), 2)
+        data.append({
+            "value": [int(period.month) - 1, year_positions[int(period.year)], numeric],
+            "label": {"show": True, "formatter": f"{numeric:.1f}%", "fontSize": 11},
+        })
+    magnitudes = [abs(item["value"][2]) for item in data]
+    bound = max(1.0, float(np.percentile(magnitudes, 90))) if magnitudes else 1.0
+    for item in data:
+        item["label"]["color"] = "#ffffff" if abs(item["value"][2]) >= bound * 0.62 else "#273142"
+    return {
+        "tooltip": {"position": "top"},
+        "grid": {"left": 52, "right": 18, "top": 18, "bottom": 54},
+        "xAxis": {
+            "type": "category", "data": [f"{month}월" for month in range(1, 13)],
+            "splitArea": {"show": True},
+        },
+        "yAxis": {
+            "type": "category", "data": [str(year) for year in years],
+            "splitArea": {"show": True},
+        },
+        "visualMap": {
+            "min": -bound, "max": bound, "calculable": True,
+            "orient": "horizontal", "left": "center", "bottom": 0,
+            "inRange": {"color": ["#d95c5c", "#fff7f7", "#ffffff", "#f3fbf5", "#3f9b65"]},
+        },
+        "series": [{
+            "name": "월 수익률", "type": "heatmap", "data": data,
+            "emphasis": {"itemStyle": {"shadowBlur": 8, "shadowColor": "rgba(0,0,0,.25)"}},
+        }],
+    }
+
+
+def _monthly_distribution_options(frame: pd.DataFrame, bins: int = 18) -> dict:
+    """Build a compact histogram showing monthly-return frequency ranges."""
+    values = pd.to_numeric(frame.get("수익률 원시값"), errors="coerce").dropna().to_numpy() * 100.0
+    if not len(values):
+        return {}
+    counts, edges = np.histogram(values, bins=min(bins, max(6, len(values) // 4)))
+    labels = [f"{left:.1f}~{right:.1f}%" for left, right in zip(edges[:-1], edges[1:])]
+    colors = ["#d95c5c" if (left + right) / 2 < 0 else "#3f9b65" for left, right in zip(edges[:-1], edges[1:])]
+    return {
+        "tooltip": {"trigger": "axis"},
+        "grid": {"left": 48, "right": 18, "top": 24, "bottom": 78},
+        "xAxis": {"type": "category", "data": labels, "axisLabel": {"rotate": 38, "fontSize": 10}},
+        "yAxis": {"type": "value", "minInterval": 1, "name": "발생 개월 수"},
+        "series": [{
+            "name": "개월 수", "type": "bar", "data": [
+                {"value": int(count), "itemStyle": {"color": color}}
+                for count, color in zip(counts, colors)
+            ],
+        }],
+    }
+
+
 def render_backtest_result(result: dict, bundle) -> None:
     metrics = result["metrics"]
     metric_values = (
@@ -69,14 +142,13 @@ def render_backtest_result(result: dict, bundle) -> None:
         ("연 수익률 표준편차", _percent(metrics.get("annual_return_std"))),
         ("최악의 해", _percent(metrics.get("worst_year"))),
     )
-    exports = diagnostic_frames(result)
     ui.label(f"{result['preset_name']} 결과").classes("section-title")
     ui.label(
         f"공통 평가기간 · {pd.Timestamp(result['common_start']).date()} ~ "
         f"{pd.Timestamp(result['common_end']).date()} · "
         f"연간 턴오버 {float(result.get('annual_turnover', 0)):.2%}"
     ).classes("text-sm text-grey-6")
-    with ui.grid(columns=3).classes("result-metric-grid w-full gap-3"):
+    with ui.grid().classes("result-metric-grid w-full gap-3"):
         for label, value in metric_values:
             _metric_card(label, value)
     ui.button(
@@ -92,6 +164,7 @@ def render_backtest_result(result: dict, bundle) -> None:
     ).props("outline no-caps").classes("diagnostic-download")
 
     nav = result["nav"].dropna().astype(float)
+    monthly_export = monthly_return_export(nav)
     chart = pd.DataFrame({"포트폴리오": nav / nav.iloc[0] - 1.0})
     benchmark = result.get("benchmark_ticker", "QQQ")
     if benchmark in bundle.adjusted_close:
@@ -116,8 +189,10 @@ def render_backtest_result(result: dict, bundle) -> None:
         decisions_tab = ui.tab("판단 원시값", icon="fact_check")
         snapshot_tab = ui.tab("데이터", icon="database")
         settings_tab = ui.tab("적용 설정", icon="settings")
-    with ui.tab_panels(tabs, value=returns_tab).classes("w-full dashboard-panels"):
-        with ui.tab_panel(returns_tab):
+    content = ui.column().classes("w-full dashboard-panels result-tab-content")
+
+    def render_returns() -> None:
+        with content:
             ui.echart({
                 "tooltip": {"trigger": "axis"},
                 "legend": {"bottom": 0, "data": list(chart.columns)},
@@ -126,7 +201,9 @@ def render_backtest_result(result: dict, bundle) -> None:
                 "yAxis": {"type": "value", "scale": True, "axisLabel": {"formatter": "{value}%"}},
                 "dataZoom": [{"type": "inside"}], "series": series,
             }).classes("dashboard-chart w-full")
-        with ui.tab_panel(drawdown_tab):
+
+    def render_drawdown() -> None:
+        with content:
             drawdown = result["drawdown"].reindex(nav.index).fillna(0.0) * 100
             ui.echart({
                 "tooltip": {"trigger": "axis"},
@@ -139,16 +216,26 @@ def render_backtest_result(result: dict, bundle) -> None:
                     "data": drawdown.round(3).tolist(), "areaStyle": {"opacity": .18},
                 }],
             }).classes("dashboard-chart w-full")
-        with ui.tab_panel(monthly_tab):
-            _result_table(_monthly_result_table(exports["01_monthly_returns.csv"]), 20)
+
+    def render_monthly() -> None:
+        with content:
+            ui.label("월별 수익률").classes("section-title")
+            ui.label("상승 월은 초록색, 하락 월은 빨간색이며 색이 진할수록 변동 폭이 큽니다.").classes("status-text")
+            ui.echart(_monthly_heatmap_options(monthly_export)).classes("monthly-heatmap w-full")
+            ui.label("월별 수익률 분포").classes("section-title")
+            ui.echart(_monthly_distribution_options(monthly_export)).classes("monthly-distribution w-full")
+            with ui.expansion("월별 수익률 표로 보기", icon="table_rows").classes("strategy-expansion w-full"):
+                _result_table(_monthly_result_table(monthly_export), 20)
             ui.button(
                 "월별 수익률 CSV", icon="download",
                 on_click=lambda: ui.download.content(
-                    exports["01_monthly_returns.csv"].to_csv(index=False).encode("utf-8-sig"),
+                    monthly_export.to_csv(index=False).encode("utf-8-sig"),
                     filename="monthly_returns.csv", media_type="text/csv",
                 ),
             ).props("outline no-caps")
-        with ui.tab_panel(history_tab):
+
+    def render_history() -> None:
+        with content:
             history = result["history"].copy()
             display = [
                 column for column in (
@@ -160,11 +247,13 @@ def render_backtest_result(result: dict, bundle) -> None:
             ui.button(
                 "리밸런싱 CSV", icon="download",
                 on_click=lambda: ui.download.content(
-                    exports["02_rebalancing.csv"].to_csv(index=False).encode("utf-8-sig"),
+                    history.to_csv(index=False).encode("utf-8-sig"),
                     filename="rebalancing.csv", media_type="text/csv",
                 ),
             ).props("outline no-caps")
-        with ui.tab_panel(decisions_tab):
+
+    def render_decisions() -> None:
+        with content:
             keys = list(result.get("candidate_snapshots", {}))
             if not keys:
                 ui.label("판단 원시값이 없습니다.").classes("empty-state")
@@ -191,18 +280,24 @@ def render_backtest_result(result: dict, bundle) -> None:
 
                 decision_date.on_value_change(lambda _: render_decision())
                 render_decision()
-                raw = pd.concat([
-                    exports["03_asset_signals.csv"], exports["04_canary_signals.csv"],
-                    exports["05_market_signals.csv"],
-                ], ignore_index=True, sort=False)
+                def decision_csv() -> bytes:
+                    exports = diagnostic_frames(result)
+                    raw = pd.concat([
+                        exports["03_asset_signals.csv"], exports["04_canary_signals.csv"],
+                        exports["05_market_signals.csv"],
+                    ], ignore_index=True, sort=False)
+                    return raw.to_csv(index=False).encode("utf-8-sig")
+
                 ui.button(
                     "전체 판단 원시값 CSV", icon="download",
                     on_click=lambda: ui.download.content(
-                        raw.to_csv(index=False).encode("utf-8-sig"),
+                        decision_csv(),
                         filename="decision_raw_values.csv", media_type="text/csv",
                     ),
                 ).props("outline no-caps")
-        with ui.tab_panel(snapshot_tab):
+
+    def render_snapshot() -> None:
+        with content:
             metadata = result.get("data_snapshot", {})
             ui.label("이번 실행에 사용된 데이터 버전").classes("font-bold")
             ui.code(json.dumps(metadata, ensure_ascii=False, indent=2, default=str)).classes(
@@ -233,10 +328,35 @@ def render_backtest_result(result: dict, bundle) -> None:
                         filename="adjusted_open.csv", media_type="text/csv",
                     ),
                 ).props("outline no-caps")
-        with ui.tab_panel(settings_tab):
+
+    def render_settings() -> None:
+        with content:
             config = dict(result.get("engine_config", {}))
             config.pop("execution_prices", None)
             config.pop("_market_data", None)
             ui.code(json.dumps(config, ensure_ascii=False, indent=2, default=str)).classes(
                 "snapshot-code w-full"
             )
+
+    renderers = {
+        "returns": render_returns,
+        "drawdown": render_drawdown,
+        "monthly": render_monthly,
+        "history": render_history,
+        "decisions": render_decisions,
+        "snapshot": render_snapshot,
+        "settings": render_settings,
+    }
+
+    def render_selected(name: str) -> None:
+        content.clear()
+        renderers[name]()
+
+    for tab, name in (
+        (returns_tab, "returns"), (drawdown_tab, "drawdown"),
+        (monthly_tab, "monthly"), (history_tab, "history"),
+        (decisions_tab, "decisions"), (snapshot_tab, "snapshot"),
+        (settings_tab, "settings"),
+    ):
+        tab.on("click", lambda _, selected=name: render_selected(selected))
+    render_selected("returns")

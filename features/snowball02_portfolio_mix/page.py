@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import date, datetime
+import time
 from zoneinfo import ZoneInfo
 
 from nicegui import run, ui
@@ -16,7 +17,7 @@ from snowball.builtin_library import (
     individual_builtin_specs,
 )
 from snowball.user_presets import UserPreset
-from .service import prepare_mix_prices, run_portfolio_mix
+from .service import run_portfolio_mix
 
 
 USER_PRESET_PREFIX = "사용자::"
@@ -126,6 +127,7 @@ def page() -> None:
             second_select.update()
 
         async def execute_mix() -> None:
+            started = time.perf_counter()
             run_button.disable()
             result_area.clear()
             status.set_text("공통 가격을 불러와 두 전략의 월별 목표를 계산하고 있습니다…")
@@ -134,11 +136,7 @@ def page() -> None:
                 second = selected_record(second_select.value)
                 start_date = date.fromisoformat(str(start_input.value))
                 end_date = date.fromisoformat(str(end_input.value))
-                status.set_text("1/3 · 두 전략의 공통 Yahoo 가격을 확인하고 있습니다…")
-                await run.io_bound(
-                    prepare_mix_prices, first, second, start_date, end_date,
-                )
-                status.set_text("2/3 · 월별 목표 비중을 결합하고 일별 성과를 계산하고 있습니다…")
+                status.set_text("1/2 · 캐시를 확인하고 필요한 가격·시장 데이터를 불러오고 있습니다…")
                 result, bundle, cache_hit = await run.io_bound(
                     run_portfolio_mix,
                     first,
@@ -156,13 +154,13 @@ def page() -> None:
                     with ui.card().classes("error-card w-full"):
                         ui.label(str(error)).classes("text-negative")
             else:
-                status.set_text("3/3 · 결과 차트와 표를 구성하고 있습니다…")
+                status.set_text("2/2 · 결과 차트와 표를 구성하고 있습니다…")
                 await asyncio.sleep(0)
                 with result_area:
                     render_backtest_result(result, bundle)
                 status.set_text(
-                    "혼합 백테스트가 완료되었습니다."
-                    + (" · 저장된 동일 결과를 불러왔습니다." if cache_hit else "")
+                    f"혼합 백테스트가 완료되었습니다 · {time.perf_counter() - started:.1f}초"
+                    + (" · 저장된 동일 결과 사용" if cache_hit else "")
                 )
             finally:
                 run_button.enable()
