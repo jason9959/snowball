@@ -7,7 +7,7 @@ from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 import pandas as pd
-from nicegui import run, ui
+from nicegui import app, run, ui
 
 from common.snowball.layout import shell
 from .data import load_adjusted_close, search_symbols
@@ -15,13 +15,16 @@ from .engine import SplitTradingConfig, run_split_backtest
 from .sheets import connect_spreadsheet, export_result
 
 
+FORM_STORAGE_KEY = "split_trading_form_v1"
+
+
 def _money(value: float, country: str) -> str:
     return f"₩{value:,.0f}" if country == "한국" else f"${value:,.2f}"
 
 
 def _actual_money(raw_value: float, country: str) -> float:
-    # The US inputs are cents, as defined in the feature specification.
-    return float(raw_value) if country == "한국" else float(raw_value) / 100.0
+    """Interpret the input directly in the selected market currency."""
+    return round(float(raw_value), 0 if country == "한국" else 2)
 
 
 def _number(value: float, country: str) -> str:
@@ -110,8 +113,19 @@ def split_trading_page() -> None:
     shell()
     today = datetime.now(ZoneInfo("Asia/Seoul")).date()
     default_start = (pd.Timestamp(today) - pd.DateOffset(years=3)).date()
+    stored_value = app.storage.user.get(FORM_STORAGE_KEY, {})
+    saved = stored_value if isinstance(stored_value, dict) else {}
+    saved_country = str(saved.get("country", "한국"))
+    if saved_country not in {"한국", "미국"}:
+        saved_country = "한국"
+    saved_symbol = str(saved.get("symbol", "")).strip()
+    saved_symbol_label = str(saved.get("symbol_label", saved_symbol)).strip()
+    saved_period = str(saved.get("period", "3"))
+    if saved_period not in {*map(str, range(1, 11)), "custom"}:
+        saved_period = "3"
     state: dict[str, object] = {
         "result": None, "conditions": None, "search_version": 0, "date_sync": False,
+        "restoring": True,
     }
 
     with ui.column().classes("page-container w-full gap-4"):
@@ -122,43 +136,122 @@ def split_trading_page() -> None:
                 ui.label("1차는 보유하고 2차 이후 매수·매도를 반복해 전액 투자와 비교합니다.").classes("page-subtitle")
 
         with ui.card().classes("backtest-controls w-full"):
-            country = ui.select(["한국", "미국"], value="한국", label="국가").props("outlined").classes("control-grow")
-            symbol_query = ui.input("종목명 또는 코드", placeholder="입력하면 종목 후보를 찾습니다").props("outlined clearable").classes("w-full")
-            symbol_select = ui.select({}, label="검색 결과").props("outlined options-dense").classes("w-full")
-            search_status = ui.label("종목명이나 코드를 입력하세요.").classes("status-text")
+            country = ui.select(["한국", "미국"], value=saved_country, label="국가").props("outlined").classes("control-grow")
+            symbol_query = ui.input(
+                "종목명 또는 코드", value=str(saved.get("symbol_query", "")),
+                placeholder="입력하면 종목 후보를 찾습니다",
+            ).props("outlined clearable").classes("w-full")
+            symbol_options = {saved_symbol: saved_symbol_label} if saved_symbol else {}
+            symbol_select = ui.select(
+                symbol_options, value=saved_symbol or None, label="검색 결과",
+            ).props("outlined options-dense").classes("w-full")
+            search_status = ui.label(
+                "저장된 종목을 복원했습니다." if saved_symbol else "종목명이나 코드를 입력하세요."
+            ).classes("status-text")
             period = ui.select(
                 {**{str(year): f"{year}년" for year in range(1, 11)}, "custom": "직접 설정"},
-                value="3", label="기간",
+                value=saved_period, label="기간",
             ).props("outlined").classes("control-grow")
             with ui.row().classes("backtest-field-grid backtest-date-grid w-full"):
-                start_input = ui.input("From", value=default_start.isoformat()).props("type=date").classes("date-input")
-                end_input = ui.input("To", value=today.isoformat()).props("type=date").classes("date-input")
+                start_input = ui.input(
+                    "From", value=str(saved.get("start", default_start.isoformat())),
+                ).props("type=date").classes("date-input")
+                end_input = ui.input(
+                    "To", value=str(saved.get("end", today.isoformat())),
+                ).props("type=date").classes("date-input")
             with ui.row().classes("backtest-field-grid w-full"):
-                initial_raw = ui.number("최초 투자총액", value=10_000_000, min=1, step=10_000).props("outlined").classes("control-grow")
-                split_method = ui.select(["금액", "횟수"], value="횟수", label="분할 방식").props("outlined").classes("control-grow")
-                amount_raw = ui.number("금액 방식 · 회당 매수금액", value=1_000_000, min=1, step=10_000).props("outlined").classes("control-grow")
-                count_preset = ui.select(["직접입력", *range(1, 11)], value=10, label="횟수 방식").props("outlined").classes("control-grow")
-                count_custom = ui.number("직접 분할횟수", value=10, min=1, step=1).props("outlined").classes("control-grow")
+                initial_raw = ui.number(
+                    "최초 투자총액", value=float(saved.get("initial", 10_000_000)), min=.01, step=1,
+                ).props("outlined").classes("control-grow")
+                split_method = ui.select(
+                    ["금액", "횟수"], value=str(saved.get("split_method", "횟수")), label="분할 방식",
+                ).props("outlined").classes("control-grow")
+                amount_raw = ui.number(
+                    "금액 방식 · 회당 매수금액", value=float(saved.get("amount", 1_000_000)),
+                    min=.01, step=1,
+                ).props("outlined").classes("control-grow")
+                count_preset = ui.select(
+                    ["직접입력", *range(1, 11)], value=saved.get("count_preset", 10),
+                    label="횟수 방식",
+                ).props("outlined").classes("control-grow")
+                count_custom = ui.number(
+                    "직접 분할횟수", value=int(saved.get("count_custom", 10)), min=1, step=1,
+                ).props("outlined").classes("control-grow")
             tranche_display = ui.input("계산된 회당 매수금액").props("outlined readonly").classes("w-full")
             with ui.row().classes("backtest-field-grid w-full"):
-                buy_preset = ui.select(["직접입력", 5, 10, 15, 20, 25, 30], value=10, label="매수 하락률").props("outlined").classes("control-grow")
-                buy_custom = ui.number("직접 매수 하락률(%)", value=10, min=.01, max=99.99, step=.1).props("outlined").classes("control-grow")
-                sell_preset = ui.select(["직접입력", 5, 10, 15, 20, 25, 30], value=10, label="매도 상승률").props("outlined").classes("control-grow")
-                sell_custom = ui.number("직접 매도 상승률(%)", value=10, min=.01, step=.1).props("outlined").classes("control-grow")
+                buy_preset = ui.select(
+                    ["직접입력", 5, 10, 15, 20, 25, 30], value=saved.get("buy_preset", 10),
+                    label="매수 하락률",
+                ).props("outlined").classes("control-grow")
+                buy_custom = ui.number(
+                    "직접 매수 하락률(%)", value=float(saved.get("buy_custom", 10)),
+                    min=.01, max=99.99, step=.1,
+                ).props("outlined").classes("control-grow")
+                sell_preset = ui.select(
+                    ["직접입력", 5, 10, 15, 20, 25, 30], value=saved.get("sell_preset", 10),
+                    label="매도 상승률",
+                ).props("outlined").classes("control-grow")
+                sell_custom = ui.number(
+                    "직접 매도 상승률(%)", value=float(saved.get("sell_custom", 10)),
+                    min=.01, step=.1,
+                ).props("outlined").classes("control-grow")
             quantity_mode = ui.select(
                 {
                     "whole": "1주 단위 정수 매매",
                     "fractional_6": "금액 기준 소수점 매매(6자리)",
                 },
-                value="fractional_6", label="수량 방식",
+                value=str(saved.get("quantity_mode", "fractional_6")), label="수량 방식",
             ).props("outlined").classes("w-full")
-            ui.label("미국 금액 입력값은 센트 단위입니다. 예: 10000 → $100.00").classes("text-xs text-grey-6")
+            currency_help = ui.label("").classes("text-xs text-grey-6")
             run_button = ui.button("백테스트 실행", icon="play_arrow").classes("primary-action w-full")
 
         status = ui.label("조건을 입력한 뒤 실행하세요.").classes("status-text")
         result_area = ui.column().classes("w-full gap-4")
 
+        def persist_form() -> None:
+            if state["restoring"]:
+                return
+            selected_symbol = str(symbol_select.value or "")
+            options = symbol_select.options if isinstance(symbol_select.options, dict) else {}
+            app.storage.user[FORM_STORAGE_KEY] = {
+                "country": str(country.value),
+                "symbol_query": str(symbol_query.value or ""),
+                "symbol": selected_symbol,
+                "symbol_label": str(options.get(selected_symbol, selected_symbol)),
+                "period": str(period.value),
+                "start": str(start_input.value),
+                "end": str(end_input.value),
+                "initial": float(initial_raw.value or 0),
+                "split_method": str(split_method.value),
+                "amount": float(amount_raw.value or 0),
+                "count_preset": count_preset.value,
+                "count_custom": int(count_custom.value or 1),
+                "buy_preset": buy_preset.value,
+                "buy_custom": float(buy_custom.value or 0),
+                "sell_preset": sell_preset.value,
+                "sell_custom": float(sell_custom.value or 0),
+                "quantity_mode": str(quantity_mode.value),
+            }
+
+        def update_currency_inputs() -> None:
+            is_us = country.value == "미국"
+            step = .01 if is_us else 1
+            digits = 2 if is_us else 0
+            for control in (initial_raw, amount_raw):
+                if control.value is not None:
+                    normalized = round(float(control.value), digits)
+                    if float(control.value) != normalized:
+                        control.value = normalized
+            initial_raw.props(f"step={step}")
+            amount_raw.props(f"step={step}")
+            currency_help.set_text(
+                "달러 금액은 USD를 직접 입력하며 소수점 둘째 자리까지 사용할 수 있습니다."
+                if is_us else
+                "원화 금액은 원 단위 정수로 입력합니다."
+            )
+
         def update_dynamic_controls() -> None:
+            update_currency_inputs()
             amount_mode = split_method.value == "금액"
             amount_raw.set_visibility(amount_mode)
             count_preset.set_visibility(not amount_mode)
@@ -172,6 +265,7 @@ def split_trading_page() -> None:
                 count_value = int(count_custom.value or 1) if count_preset.value == "직접입력" else int(count_preset.value or 1)
                 raw_tranche = raw_total / max(1, count_value)
             tranche_display.value = _money(_actual_money(raw_tranche, str(country.value)), str(country.value))
+            persist_form()
 
         def apply_period() -> None:
             if period.value == "custom":
@@ -210,6 +304,7 @@ def split_trading_page() -> None:
             symbol_select.value = next(iter(options), None)
             symbol_select.update()
             search_status.set_text(f"{len(options)}개 후보를 찾았습니다." if options else "일치하는 종목이 없습니다.")
+            persist_form()
 
         def reset_symbol() -> None:
             symbol_query.value = ""
@@ -217,8 +312,10 @@ def split_trading_page() -> None:
             symbol_select.value = None
             symbol_select.update()
             update_dynamic_controls()
+            persist_form()
 
         async def execute() -> None:
+            persist_form()
             run_button.disable()
             result_area.clear()
             status.set_text("수정종가를 불러와 분할매매를 계산하고 있습니다…")
@@ -238,7 +335,7 @@ def split_trading_page() -> None:
                     count_value = int(count_custom.value or 1) if count_preset.value == "직접입력" else int(count_preset.value or 1)
                     if count_value < 1:
                         raise ValueError("분할횟수는 1 이상의 정수여야 합니다.")
-                    tranche = capital / count_value
+                    tranche = _actual_money(capital / count_value, selected_country)
                     split_input = f"횟수 · {count_value}회"
                 buy = float(buy_custom.value if buy_preset.value == "직접입력" else buy_preset.value) / 100
                 sell = float(sell_custom.value if sell_preset.value == "직접입력" else sell_preset.value) / 100
@@ -298,13 +395,30 @@ def split_trading_page() -> None:
             finally:
                 run_button.enable()
 
+        def period_changed() -> None:
+            apply_period()
+            persist_form()
+
+        def date_changed() -> None:
+            mark_custom()
+            persist_form()
+
+        async def query_changed() -> None:
+            persist_form()
+            await search()
+
         country.on_value_change(lambda _: reset_symbol())
-        symbol_query.on_value_change(lambda _: search())
-        period.on_value_change(lambda _: apply_period())
-        start_input.on_value_change(lambda _: mark_custom())
-        end_input.on_value_change(lambda _: mark_custom())
-        for control in (country, initial_raw, split_method, amount_raw, count_preset, count_custom, buy_preset, sell_preset):
+        symbol_query.on_value_change(lambda _: query_changed())
+        symbol_select.on_value_change(lambda _: persist_form())
+        period.on_value_change(lambda _: period_changed())
+        start_input.on_value_change(lambda _: date_changed())
+        end_input.on_value_change(lambda _: date_changed())
+        for control in (
+            initial_raw, split_method, amount_raw, count_preset, count_custom,
+            buy_preset, buy_custom, sell_preset, sell_custom, quantity_mode,
+        ):
             control.on_value_change(lambda _: update_dynamic_controls())
         run_button.on("click", execute)
+        state["restoring"] = False
         update_dynamic_controls()
 

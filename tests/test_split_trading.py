@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 
 import pandas as pd
 
@@ -11,6 +12,15 @@ def closes(values):
 
 
 class SplitTradingTests(unittest.TestCase):
+    def test_page_persists_form_and_uses_direct_currency_inputs(self):
+        source = (
+            Path(__file__).resolve().parents[1]
+            / "features" / "snowball04_split_trading" / "page.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("app.storage.user[FORM_STORAGE_KEY]", source)
+        self.assertIn('step = .01 if is_us else 1', source)
+        self.assertNotIn("float(raw_value) / 100.0", source)
+
     def test_high_watermark_sets_second_boundary(self):
         result = run_split_backtest(
             closes([100, 130, 140, 135, 125]),
