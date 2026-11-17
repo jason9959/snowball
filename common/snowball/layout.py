@@ -108,6 +108,11 @@ def home_page() -> None:
                 "Google Sheet의 계좌별 거래 원장을 읽어 평가액과 투자 성과를 확인합니다.",
                 "계좌 현황 보기", "/accounts",
             )
+            feature_card(
+                "stacked_line_chart", "Snowball 04 · 분할매매 백테스트",
+                "1차 보유분은 유지하고 추가 차수의 반복 매매 성과를 전액 투자와 비교합니다.",
+                "분할매매 백테스트", "/split-trading",
+            )
 
         ui.separator().classes("my-3")
         ui.label("Functions 투자 도구").classes("page-title section-heading")
