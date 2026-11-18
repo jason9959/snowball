@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from datetime import date, datetime
 import math
 from zoneinfo import ZoneInfo
@@ -258,6 +259,7 @@ def _combined_heatmap(
 
 def _best_heatmap_condition(
     optimization: dict, metric: str, title: str, country: str,
+    on_select: Callable[[int, float], Awaitable[None]] | None = None,
 ) -> None:
     frame = optimization["table"]
     best = frame.loc[frame[metric].astype(float).idxmax()]
@@ -274,6 +276,17 @@ def _best_heatmap_condition(
                 f"· 매수·매도율 {float(best['매수·매도율']):.0%}"
             ).classes("text-sm")
             ui.label(value).classes("metric-value")
+        if on_select is not None:
+            slot_count = int(best["동시 보유 차수"])
+            rate = float(best["매수·매도율"])
+
+            async def select_condition() -> None:
+                await on_select(slot_count, rate)
+
+            ui.button(
+                "이 조건으로 상세 백테스트", icon="play_arrow",
+                on_click=select_condition,
+            ).props("outline no-caps").classes("w-full")
 
 
 def _allocation_chart(optimization: dict) -> None:
@@ -294,6 +307,7 @@ def _allocation_chart(optimization: dict) -> None:
 
 def _render_optimization(
     optimization: dict, country: str, symbol_label: str, mode: str,
+    on_select: Callable[[int, float], Awaitable[None]] | None = None,
 ) -> None:
     ui.label(f"{symbol_label} 조건 비교 결과").classes("section-title")
     ui.label(
@@ -304,21 +318,21 @@ def _render_optimization(
         _paired_rate_chart(optimization)
     elif mode == "combined":
         _best_heatmap_condition(
-            optimization, "총수익률", "총수익률", country,
+            optimization, "총수익률", "총수익률", country, on_select,
         )
         _combined_heatmap(
             optimization, "총수익률",
             "회당 매수금액 × 매수·매도율 · 총수익률", country,
         )
         _best_heatmap_condition(
-            optimization, "MDD", "MDD", country,
+            optimization, "MDD", "MDD", country, on_select,
         )
         _combined_heatmap(
             optimization, "MDD",
             "회당 매수금액 × 매수·매도율 · MDD", country,
         )
         _best_heatmap_condition(
-            optimization, "수익률/MDD", "수익률/MDD", country,
+            optimization, "수익률/MDD", "수익률/MDD", country, on_select,
         )
         _combined_heatmap(
             optimization, "수익률/MDD",
@@ -568,6 +582,29 @@ def split_trading_page() -> None:
             update_dynamic_controls()
             persist_form()
 
+        async def run_selected_condition(slot_count: int, rate: float) -> None:
+            """Move a heatmap winner into the single-test controls and run it."""
+            rate_percent = round(float(rate) * 100, 8)
+            test_mode.value = "single"
+            count_custom.value = int(slot_count)
+            preset_values = set(range(5, 51, 5))
+            rounded_percent = int(round(rate_percent))
+            if (
+                rounded_percent in preset_values
+                and abs(rate_percent - rounded_percent) < 1e-8
+            ):
+                rate_preset.value = rounded_percent
+            else:
+                rate_preset.value = "직접입력"
+                rate_custom.value = rate_percent
+            update_dynamic_controls()
+            persist_form()
+            status.set_text(
+                f"{slot_count}회 · 매수·매도율 {rate_percent:g}% 조건으로 "
+                "상세 백테스트를 실행합니다…"
+            )
+            await execute()
+
         def show_output(
             result: dict | None,
             optimization: dict | None,
@@ -586,6 +623,7 @@ def split_trading_page() -> None:
                 elif optimization is not None:
                     _render_optimization(
                         optimization, selected_country, label, selected_test_mode,
+                        run_selected_condition,
                     )
                 if optimization is None and result is not None:
                     export_status = ui.label(
