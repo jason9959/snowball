@@ -64,12 +64,18 @@ def _finish(runs: list[dict], criterion: str) -> dict:
     rows = []
     for rank, item in enumerate(runs, start=1):
         rows.append({"순위": rank, **item["parameters"], **_summary(item["result"])})
+    table = pd.DataFrame(rows)
+    metric_winners = {}
+    for metric in ("총수익률", "MDD", "수익률/MDD"):
+        winner = table.loc[table[metric].astype(float).idxmax()]
+        metric_winners[metric] = runs[int(winner["순위"]) - 1]["result"]
     return {
         "criterion": criterion,
         "runs": runs,
         "best": runs[0]["result"],
         "best_parameters": runs[0]["parameters"],
-        "table": pd.DataFrame(rows),
+        "table": table,
+        "metric_winners": metric_winners,
     }
 
 

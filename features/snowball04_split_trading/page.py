@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
 from datetime import date, datetime
 import math
 from zoneinfo import ZoneInfo
@@ -257,9 +256,50 @@ def _combined_heatmap(
     }).classes("w-full").style(f"height: {max(460, len(conditions) * 34 + 140)}px")
 
 
+def _render_result_preview(result: dict, country: str) -> None:
+    """Render an already-calculated winner without its long trade table."""
+    dates = [timestamp.strftime("%Y-%m-%d") for timestamp in result["split_nav"].index]
+    digits = 0 if country == "한국" else 2
+    ui.echart({
+        "tooltip": {"trigger": "axis"},
+        "legend": {"bottom": 0},
+        "grid": {"left": 70, "right": 20, "top": 20, "bottom": 62},
+        "xAxis": {"type": "category", "data": dates, "axisLabel": {"hideOverlap": True}},
+        "yAxis": {"type": "value", "scale": True},
+        "dataZoom": [{"type": "inside"}],
+        "series": [
+            {
+                "name": "전액 투자", "type": "line", "showSymbol": False,
+                "data": result["full_nav"].round(digits).tolist(),
+            },
+            {
+                "name": "분할매매", "type": "line", "showSymbol": False,
+                "data": result["split_nav"].round(digits).tolist(),
+                "lineStyle": {"width": 3},
+            },
+        ],
+    }).classes("dashboard-chart w-full")
+    metrics = (
+        ("최종 평가액", _money(result["split_final"], country)),
+        ("총수익률", f"{result['split_return']:.2%}"),
+        ("MDD", f"{result['split_max_drawdown']:.2%}"),
+        ("현재 낙폭", f"{result['split_current_drawdown']:.2%}"),
+        (
+            "수익률/MDD",
+            "-" if result["split_return_mdd"] is None else f"{result['split_return_mdd']:.2f}",
+        ),
+        ("거래 횟수", f"{len(result['trades']):,}회"),
+    )
+    with ui.grid().classes("result-metric-grid w-full gap-2"):
+        for label, value in metrics:
+            with ui.card().classes("metric-card w-full"):
+                with ui.row().classes("metric-row w-full items-center justify-between no-wrap"):
+                    ui.label(label).classes("metric-label")
+                    ui.label(value).classes("metric-value")
+
+
 def _best_heatmap_condition(
     optimization: dict, metric: str, title: str, country: str,
-    on_select: Callable[[int, float], Awaitable[None]] | None = None,
 ) -> None:
     frame = optimization["table"]
     best = frame.loc[frame[metric].astype(float).idxmax()]
@@ -276,17 +316,19 @@ def _best_heatmap_condition(
                 f"· 매수·매도율 {float(best['매수·매도율']):.0%}"
             ).classes("text-sm")
             ui.label(value).classes("metric-value")
-        if on_select is not None:
-            slot_count = int(best["동시 보유 차수"])
-            rate = float(best["매수·매도율"])
-
-            async def select_condition() -> None:
-                await on_select(slot_count, rate)
-
-            ui.button(
-                "이 조건으로 상세 백테스트", icon="play_arrow",
-                on_click=select_condition,
-            ).props("outline no-caps").classes("w-full")
+        preview_result = optimization.get("metric_winners", {}).get(metric)
+        if preview_result is not None:
+            with ui.column().classes("w-full gap-2"):
+                toggle = ui.button(
+                    "상세 결과 펼치기", icon="expand_more",
+                ).props("outline no-caps").classes("w-full")
+                with ui.expansion(
+                    "미리 계산된 상세 결과", icon="analytics", value=False,
+                ).classes("strategy-expansion w-full") as detail:
+                    _render_result_preview(preview_result, country)
+                toggle.on(
+                    "click", lambda: detail.set_value(not bool(detail.value)),
+                )
 
 
 def _allocation_chart(optimization: dict) -> None:
@@ -307,7 +349,6 @@ def _allocation_chart(optimization: dict) -> None:
 
 def _render_optimization(
     optimization: dict, country: str, symbol_label: str, mode: str,
-    on_select: Callable[[int, float], Awaitable[None]] | None = None,
 ) -> None:
     ui.label(f"{symbol_label} 조건 비교 결과").classes("section-title")
     ui.label(
@@ -318,21 +359,21 @@ def _render_optimization(
         _paired_rate_chart(optimization)
     elif mode == "combined":
         _best_heatmap_condition(
-            optimization, "총수익률", "총수익률", country, on_select,
+            optimization, "총수익률", "총수익률", country,
         )
         _combined_heatmap(
             optimization, "총수익률",
             "회당 매수금액 × 매수·매도율 · 총수익률", country,
         )
         _best_heatmap_condition(
-            optimization, "MDD", "MDD", country, on_select,
+            optimization, "MDD", "MDD", country,
         )
         _combined_heatmap(
             optimization, "MDD",
             "회당 매수금액 × 매수·매도율 · MDD", country,
         )
         _best_heatmap_condition(
-            optimization, "수익률/MDD", "수익률/MDD", country, on_select,
+            optimization, "수익률/MDD", "수익률/MDD", country,
         )
         _combined_heatmap(
             optimization, "수익률/MDD",
@@ -582,29 +623,6 @@ def split_trading_page() -> None:
             update_dynamic_controls()
             persist_form()
 
-        async def run_selected_condition(slot_count: int, rate: float) -> None:
-            """Move a heatmap winner into the single-test controls and run it."""
-            rate_percent = round(float(rate) * 100, 8)
-            test_mode.value = "single"
-            count_custom.value = int(slot_count)
-            preset_values = set(range(5, 51, 5))
-            rounded_percent = int(round(rate_percent))
-            if (
-                rounded_percent in preset_values
-                and abs(rate_percent - rounded_percent) < 1e-8
-            ):
-                rate_preset.value = rounded_percent
-            else:
-                rate_preset.value = "직접입력"
-                rate_custom.value = rate_percent
-            update_dynamic_controls()
-            persist_form()
-            status.set_text(
-                f"{slot_count}회 · 매수·매도율 {rate_percent:g}% 조건으로 "
-                "상세 백테스트를 실행합니다…"
-            )
-            await execute()
-
         def show_output(
             result: dict | None,
             optimization: dict | None,
@@ -623,7 +641,6 @@ def split_trading_page() -> None:
                 elif optimization is not None:
                     _render_optimization(
                         optimization, selected_country, label, selected_test_mode,
-                        run_selected_condition,
                     )
                 if optimization is None and result is not None:
                     export_status = ui.label(

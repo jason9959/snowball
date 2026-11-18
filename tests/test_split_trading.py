@@ -85,9 +85,9 @@ class SplitTradingTests(unittest.TestCase):
         self.assertIn('_best_heatmap_condition(', source)
         self.assertIn('"calculable": False', source)
         self.assertIn('expected_cells = len(conditions) * len(rates)', source)
-        self.assertIn('"이 조건으로 상세 백테스트"', source)
-        self.assertIn('test_mode.value = "single"', source)
-        self.assertIn('await execute()', source)
+        self.assertIn('"상세 결과 펼치기"', source)
+        self.assertIn('"미리 계산된 상세 결과"', source)
+        self.assertNotIn('test_mode.value = "single"', source)
 
     def test_rate_sweep_uses_five_percentage_point_steps_and_includes_maximum(self):
         self.assertEqual(rate_sweep(10, 30), [.10, .15, .20, .25, .30])
@@ -115,6 +115,14 @@ class SplitTradingTests(unittest.TestCase):
         )
         pd.testing.assert_frame_equal(
             restored_optimization["table"], optimization["table"], check_dtype=False,
+        )
+        self.assertEqual(
+            set(restored_optimization["metric_winners"]),
+            {"총수익률", "MDD", "수익률/MDD"},
+        )
+        self.assertAlmostEqual(
+            restored_optimization["metric_winners"]["MDD"]["split_max_drawdown"],
+            optimization["metric_winners"]["MDD"]["split_max_drawdown"],
         )
 
     def test_high_watermark_sets_second_boundary(self):

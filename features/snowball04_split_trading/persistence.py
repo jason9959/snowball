@@ -52,10 +52,22 @@ def deserialize_result(payload: dict) -> dict:
 def serialize_optimization(optimization: dict | None) -> dict | None:
     if optimization is None:
         return None
-    return {"table": optimization["table"].to_json(orient="split")}
+    return {
+        "table": optimization["table"].to_json(orient="split"),
+        "metric_winners": {
+            metric: serialize_result(result)
+            for metric, result in optimization.get("metric_winners", {}).items()
+        },
+    }
 
 
 def deserialize_optimization(payload: dict | None) -> dict | None:
     if payload is None:
         return None
-    return {"table": pd.read_json(StringIO(payload["table"]), orient="split")}
+    return {
+        "table": pd.read_json(StringIO(payload["table"]), orient="split"),
+        "metric_winners": {
+            metric: deserialize_result(result)
+            for metric, result in payload.get("metric_winners", {}).items()
+        },
+    }
