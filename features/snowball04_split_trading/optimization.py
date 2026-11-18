@@ -17,6 +17,23 @@ CRITERIA = {
 }
 
 
+def rate_sweep(minimum: float, maximum: float) -> list[float]:
+    """Return paired buy/sell rates in 5 percentage-point increments."""
+    if minimum > maximum:
+        raise ValueError("최소 매수·매도율은 최대 매수·매도율보다 클 수 없습니다.")
+    if minimum <= 0 or maximum >= 100:
+        raise ValueError("매수·매도율은 0% 초과 100% 미만이어야 합니다.")
+    values = []
+    value = minimum
+    while value <= maximum + 1e-9:
+        values.append(round(value / 100, 10))
+        value += 5
+    maximum_rate = round(maximum / 100, 10)
+    if values[-1] != maximum_rate:
+        values.append(maximum_rate)
+    return values
+
+
 def _score(result: dict, criterion: str) -> float:
     if criterion == "return":
         return float(result["split_return"])

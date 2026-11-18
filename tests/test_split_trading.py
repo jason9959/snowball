@@ -5,6 +5,7 @@ import pandas as pd
 
 from features.snowball04_split_trading.engine import SplitTradingConfig, run_split_backtest
 from features.snowball04_split_trading.optimization import (
+    rate_sweep,
     run_combined_sweep,
     run_ratio_sweep,
     run_tranche_sweep,
@@ -66,7 +67,19 @@ class SplitTradingTests(unittest.TestCase):
         self.assertIn('step = .01 if is_us else 1', source)
         self.assertNotIn("float(raw_value) / 100.0", source)
         self.assertNotIn("split_method = ui.select", source)
-        self.assertIn('"combined": "통합 최적화', source)
+        self.assertIn('"combined": "통합 비교', source)
+        self.assertNotIn('label="최적화 기준"', source)
+        self.assertNotIn('"최소 분할횟수"', source)
+        self.assertNotIn('"최대 분할횟수"', source)
+        self.assertIn('"최소 매수·매도율(%)"', source)
+        self.assertIn('"최대 매수·매도율(%)"', source)
+        self.assertIn("counts = list(range(1, count_value + 1))", source)
+
+    def test_rate_sweep_uses_five_percentage_point_steps_and_includes_maximum(self):
+        self.assertEqual(rate_sweep(10, 30), [.10, .15, .20, .25, .30])
+        self.assertEqual(rate_sweep(12, 20), [.12, .17, .20])
+        with self.assertRaisesRegex(ValueError, "최소 매수·매도율"):
+            rate_sweep(30, 10)
 
     def test_high_watermark_sets_second_boundary(self):
         result = run_split_backtest(
