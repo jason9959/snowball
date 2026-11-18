@@ -12,7 +12,7 @@ import pandas as pd
 TRADE_COLUMNS = (
     "거래일", "당일 순번", "매수/매도", "차수", "거래 ID",
     "시뮬레이션 체결가", "수량", "체결금액", "실현손익", "실현수익률",
-    "체결 후 현금잔액",
+    "체결 후 현금잔액", "거래비용",
 )
 
 
@@ -24,6 +24,11 @@ class SplitTradingConfig:
     sell_rise: float
     quantity_mode: str = "fractional_6"
     slot_count: int | None = None
+    buy_fee_rate: float = 0.0
+    sell_fee_rate: float = 0.0
+    sell_tax_rate: float = 0.0
+    slippage_rate: float = 0.0
+    fx_cost_rate: float = 0.0
 
     def validate(self) -> None:
         if self.initial_capital <= 0 or self.tranche_amount <= 0:
@@ -40,6 +45,13 @@ class SplitTradingConfig:
             raise ValueError("분할횟수는 1 이상의 정수여야 합니다.")
         if self.max_slots > 1_000:
             raise ValueError("동시 보유 차수는 최대 1,000차까지 계산할 수 있습니다.")
+        for name, value in (
+            ("매수수수료", self.buy_fee_rate), ("매도수수료", self.sell_fee_rate),
+            ("매도세금", self.sell_tax_rate), ("슬리피지", self.slippage_rate),
+            ("환전비용", self.fx_cost_rate),
+        ):
+            if not 0 <= value < 1:
+                raise ValueError(f"{name}은 0% 이상 100% 미만이어야 합니다.")
 
     @property
     def max_slots(self) -> int:
@@ -54,6 +66,7 @@ class _Position:
     trade_id: str
     price: float
     quantity: float
+    cost_basis: float
 
 
 def _order_quantity(budget: float, price: float, mode: str) -> float:
@@ -106,7 +119,10 @@ def run_split_backtest(closes: pd.Series, config: SplitTradingConfig) -> dict:
     trades: list[dict] = []
     daily_sequence: dict[pd.Timestamp, int] = {}
 
-    def record(side: str, slot: int, price: float, position: _Position, *, profit=None) -> None:
+    def record(
+        side: str, slot: int, price: float, position: _Position,
+        *, profit=None, trading_cost: float = 0.0,
+    ) -> None:
         sequence = daily_sequence.get(current_date, 0) + 1
         daily_sequence[current_date] = sequence
         trades.append({
@@ -115,26 +131,41 @@ def run_split_backtest(closes: pd.Series, config: SplitTradingConfig) -> dict:
             "시뮬레이션 체결가": float(price), "수량": position.quantity,
             "체결금액": float(price * position.quantity),
             "실현손익": profit if side == "매도" else None,
-            "실현수익률": (price / position.price - 1.0) if side == "매도" else None,
-            "체결 후 현금잔액": cash,
+            "실현수익률": (
+                float(profit) / position.cost_basis
+                if side == "매도" and profit is not None else None
+            ),
+            "체결 후 현금잔액": cash, "거래비용": trading_cost,
         })
 
     current_date = first_date
-    first_quantity = _order_quantity(config.tranche_amount, first_price, config.quantity_mode)
+    buy_cost_rate = config.buy_fee_rate + config.fx_cost_rate
+    sell_cost_rate = config.sell_fee_rate + config.sell_tax_rate + config.fx_cost_rate
+    first_execution = first_price * (1.0 + config.slippage_rate)
+    first_unit_cost = first_execution * (1.0 + buy_cost_rate)
+    first_quantity = _order_quantity(config.tranche_amount, first_unit_cost, config.quantity_mode)
     if first_quantity <= 0:
         raise ValueError("회당 매수금액으로 첫 거래일에 1주 이상 매수할 수 없습니다.")
-    first_spend = first_quantity * first_price
+    first_gross = first_quantity * first_execution
+    first_cost = first_gross * buy_cost_rate
+    first_spend = first_gross + first_cost
     cash -= first_spend
-    first_position = _Position(1, f"T{next(ids):06d}", first_price, first_quantity)
+    first_position = _Position(
+        1, f"T{next(ids):06d}", first_execution, first_quantity, first_spend,
+    )
     positions[1] = first_position
-    record("매수", 1, first_price, first_position)
+    record("매수", 1, first_execution, first_position, trading_cost=first_cost)
 
     # Temporary base follows highs while only the permanent first slot remains.
     temporary_base = first_price
     confirmed_base: float | None = None
     split_values: list[float] = []
-    full_quantity = _order_quantity(config.initial_capital, first_price, config.quantity_mode)
-    full_cash = config.initial_capital - full_quantity * first_price
+    cash_values: list[float] = []
+    holding_values: list[float] = []
+    position_counts: list[int] = []
+    full_quantity = _order_quantity(config.initial_capital, first_unit_cost, config.quantity_mode)
+    full_spend = full_quantity * first_unit_cost
+    full_cash = config.initial_capital - full_spend
 
     for index, (current_date, close) in enumerate(prices.items()):
         close = float(close)
@@ -156,15 +187,22 @@ def run_split_backtest(closes: pd.Series, config: SplitTradingConfig) -> dict:
                         continue
                     if confirmed_base is None:
                         confirmed_base = base
-                    quantity = _order_quantity(
-                        config.tranche_amount, boundary, config.quantity_mode,
-                    )
+                    execution = boundary * (1.0 + config.slippage_rate)
+                    unit_cost = execution * (1.0 + buy_cost_rate)
+                    quantity = _order_quantity(config.tranche_amount, unit_cost, config.quantity_mode)
                     if quantity <= 0:
                         continue
-                    position = _Position(slot, f"T{next(ids):06d}", boundary, quantity)
-                    cash -= quantity * boundary
+                    gross = quantity * execution
+                    trading_cost = gross * buy_cost_rate
+                    spend = gross + trading_cost
+                    position = _Position(
+                        slot, f"T{next(ids):06d}", execution, quantity, spend,
+                    )
+                    cash -= spend
                     positions[slot] = position
-                    record("매수", slot, boundary, position)
+                    record(
+                        "매수", slot, execution, position, trading_cost=trading_cost,
+                    )
 
             elif close > previous:
                 sellable = []
@@ -175,18 +213,31 @@ def run_split_backtest(closes: pd.Series, config: SplitTradingConfig) -> dict:
                     if previous <= target <= close:
                         sellable.append((target, slot, position))
                 for target, slot, position in sorted(sellable):
-                    proceeds = position.quantity * target
-                    profit = proceeds - position.quantity * position.price
+                    execution = target * (1.0 - config.slippage_rate)
+                    gross = position.quantity * execution
+                    trading_cost = gross * sell_cost_rate
+                    proceeds = gross - trading_cost
+                    profit = proceeds - position.cost_basis
                     cash += proceeds
                     del positions[slot]
-                    record("매도", slot, target, position, profit=profit)
+                    record(
+                        "매도", slot, execution, position,
+                        profit=profit, trading_cost=trading_cost,
+                    )
                 if not any(slot > 1 for slot in positions):
                     temporary_base = max(float(confirmed_base or first_price), close)
                     confirmed_base = None
 
-        split_values.append(cash + sum(position.quantity * close for position in positions.values()))
+        holdings = sum(position.quantity * close for position in positions.values())
+        split_values.append(cash + holdings)
+        cash_values.append(cash)
+        holding_values.append(holdings)
+        position_counts.append(len(positions))
 
     split_nav = pd.Series(split_values, index=prices.index, name="분할매매")
+    cash_nav = pd.Series(cash_values, index=prices.index, name="현금")
+    holdings_nav = pd.Series(holding_values, index=prices.index, name="보유분")
+    position_count = pd.Series(position_counts, index=prices.index, name="보유차수")
     full_nav = (prices * full_quantity + full_cash).rename("전액 투자")
     final_close = float(prices.iloc[-1])
     holdings_value = sum(position.quantity * final_close for position in positions.values())
@@ -199,6 +250,9 @@ def run_split_backtest(closes: pd.Series, config: SplitTradingConfig) -> dict:
         "prices": prices,
         "full_nav": full_nav,
         "split_nav": split_nav,
+        "cash_nav": cash_nav,
+        "holdings_nav": holdings_nav,
+        "position_count": position_count,
         "trades": trade_frame,
         "max_slots": slots,
         "quantity_mode": config.quantity_mode,
@@ -211,6 +265,8 @@ def run_split_backtest(closes: pd.Series, config: SplitTradingConfig) -> dict:
         "return_difference": float((split_nav.iloc[-1] - full_nav.iloc[-1]) / config.initial_capital),
         "actual_start": prices.index[0].date(),
         "actual_end": prices.index[-1].date(),
+        "open_positions": len(positions),
+        "total_trading_cost": float(trade_frame["거래비용"].sum()),
     }
     result.update({f"full_{key}": value for key, value in full_risk.items()})
     result.update({f"split_{key}": value for key, value in split_risk.items()})

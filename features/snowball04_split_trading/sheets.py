@@ -92,6 +92,9 @@ def export_result(
         sheet.format(f"{column}{first_trade_row}:{column}{last_trade_row}", {
             "numberFormat": {"type": "NUMBER", "pattern": money_pattern},
         })
+    sheet.format(f"L{first_trade_row}:L{last_trade_row}", {
+        "numberFormat": {"type": "NUMBER", "pattern": money_pattern},
+    })
     sheet.format(f"J{first_trade_row}:J{last_trade_row}", {
         "numberFormat": {"type": "PERCENT", "pattern": "0.00%"},
     })

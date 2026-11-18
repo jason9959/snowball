@@ -3,6 +3,13 @@ from pathlib import Path
 
 import pandas as pd
 
+from features.snowball04_split_trading.analytics import (
+    add_stability_metrics,
+    annual_performance,
+    execution_warnings,
+    operational_metrics,
+    period_validation,
+)
 from features.snowball04_split_trading.engine import SplitTradingConfig, run_split_backtest
 from features.snowball04_split_trading.optimization import (
     rate_sweep,
@@ -34,6 +41,37 @@ class SplitTradingTests(unittest.TestCase):
         self.assertEqual(str(result["full_mdd_peak_date"]), "2026-01-02")
         self.assertEqual(str(result["full_mdd_trough_date"]), "2026-01-05")
         self.assertEqual(str(result["full_mdd_recovery_date"]), "2026-01-06")
+
+    def test_costs_and_operational_analytics_are_applied(self):
+        price = closes([100, 90, 110, 95, 120])
+        free = run_split_backtest(price, SplitTradingConfig(300, 100, .10, .10))
+        costly = run_split_backtest(
+            price,
+            SplitTradingConfig(
+                300, 100, .10, .10, "fractional_6", None,
+                .001, .001, .002, .001, .001,
+            ),
+        )
+        self.assertLess(costly["split_final"], free["split_final"])
+        self.assertGreater(costly["total_trading_cost"], 0)
+        metrics = operational_metrics(costly)
+        self.assertIn("평균 투자집행률", metrics)
+        self.assertGreaterEqual(metrics["완료 매도 횟수"], 1)
+        self.assertFalse(annual_performance(costly).empty)
+        self.assertFalse(period_validation(costly).empty)
+        self.assertTrue(execution_warnings(costly))
+
+    def test_stability_score_uses_neighboring_grid_cells(self):
+        frame = pd.DataFrame([
+            {"동시 보유 차수": count, "매수·매도율": rate,
+             "총수익률": count / 10 + rate, "MDD": -.2 + count / 100,
+             "수익률/MDD": count + rate}
+            for count in (1, 2, 3) for rate in (.10, .15, .20)
+        ])
+        scored = add_stability_metrics(frame)
+        self.assertIn("안정구간 점수", scored)
+        self.assertIn("안정성 판정", scored)
+        self.assertTrue(scored["안정구간 점수"].between(0, 100).all())
 
     def test_ratio_sweep_ranks_every_combination(self):
         optimization = run_ratio_sweep(
@@ -118,7 +156,7 @@ class SplitTradingTests(unittest.TestCase):
         )
         self.assertEqual(
             set(restored_optimization["metric_winners"]),
-            {"총수익률", "MDD", "수익률/MDD"},
+            {"총수익률", "MDD", "수익률/MDD", "안정구간 점수"},
         )
         self.assertAlmostEqual(
             restored_optimization["metric_winners"]["MDD"]["split_max_drawdown"],

@@ -7,6 +7,7 @@ from typing import Iterable
 
 import pandas as pd
 
+from .analytics import add_stability_metrics, operational_metrics
 from .engine import SplitTradingConfig, run_split_backtest
 
 
@@ -46,6 +47,7 @@ def _score(result: dict, criterion: str) -> float:
 
 
 def _summary(result: dict) -> dict[str, float | int]:
+    operations = operational_metrics(result)
     return {
         "최종 평가액": float(result["split_final"]),
         "총수익률": float(result["split_return"]),
@@ -54,6 +56,11 @@ def _summary(result: dict) -> dict[str, float | int]:
         "수익률/MDD": float(result["split_return_mdd"] or 0.0),
         "거래 횟수": int(len(result["trades"])),
         "최종 현금": float(result["final_cash"]),
+        "완료 매도 횟수": int(operations["완료 매도 횟수"]),
+        "수익 거래 비율": float(operations["수익 거래 비율"]),
+        "평균 투자집행률": float(operations["평균 투자집행률"]),
+        "평균 현금비중": float(operations["평균 현금비중"]),
+        "미청산 보유 차수": int(operations["미청산 보유 차수"]),
     }
 
 
@@ -64,9 +71,11 @@ def _finish(runs: list[dict], criterion: str) -> dict:
     rows = []
     for rank, item in enumerate(runs, start=1):
         rows.append({"순위": rank, **item["parameters"], **_summary(item["result"])})
-    table = pd.DataFrame(rows)
+    table = add_stability_metrics(pd.DataFrame(rows))
     metric_winners = {}
-    for metric in ("총수익률", "MDD", "수익률/MDD"):
+    for metric in ("총수익률", "MDD", "수익률/MDD", "안정구간 점수"):
+        if metric not in table:
+            continue
         winner = table.loc[table[metric].astype(float).idxmax()]
         metric_winners[metric] = runs[int(winner["순위"]) - 1]["result"]
     return {

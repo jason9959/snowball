@@ -18,7 +18,10 @@ def _storage_scalar(value: object) -> object:
 
 
 def serialize_result(result: dict) -> dict:
-    series_keys = ("prices", "full_nav", "split_nav")
+    series_keys = (
+        "prices", "full_nav", "split_nav", "cash_nav", "holdings_nav",
+        "position_count",
+    )
     return {
         "scalars": {
             key: _storage_scalar(value)

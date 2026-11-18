@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from datetime import date, datetime
 import math
 from zoneinfo import ZoneInfo
@@ -11,6 +12,12 @@ import pandas as pd
 from nicegui import app, run, ui
 
 from common.snowball.layout import shell
+from .analytics import (
+    annual_performance,
+    execution_warnings,
+    operational_metrics,
+    period_validation,
+)
 from .data import load_adjusted_close, search_symbols
 from .engine import SplitTradingConfig, run_split_backtest
 from .optimization import (
@@ -30,6 +37,7 @@ from .sheets import connect_spreadsheet, export_result
 
 FORM_STORAGE_KEY = "split_trading_form_v1"
 LAST_RESULT_STORAGE_KEY = "split_trading_last_result_v1"
+COMPARISON_STORAGE_KEY = "split_trading_comparison_v1"
 FORM_VERSION = 2
 
 
@@ -124,9 +132,50 @@ def _render_result(result: dict, country: str, symbol_label: str) -> None:
         f"{result['split_mdd_peak_date']} → {result['split_mdd_trough_date']} · "
         f"회복 {recovery} · {result['split_mdd_duration_days']}일"
     ).classes("text-sm text-grey-6")
+    with ui.expansion("운용 품질·기간 검증·경고", icon="fact_check", value=False).classes(
+        "strategy-expansion w-full"
+    ):
+        operations = operational_metrics(result)
+        operation_cards = (
+            ("완료 매도", f"{operations['완료 매도 횟수']}회"),
+            ("수익 거래 비율", f"{operations['수익 거래 비율']:.1%}"),
+            ("평균 보유기간", f"{operations['평균 보유기간']:.1f}일"),
+            ("평균 투자집행률", f"{operations['평균 투자집행률']:.1%}"),
+            ("평균 현금비중", f"{operations['평균 현금비중']:.1%}"),
+            ("미청산 차수", f"{operations['미청산 보유 차수']}개"),
+            ("총 거래비용", _money(operations["총 거래비용"], country)),
+        )
+        with ui.grid().classes("result-metric-grid w-full gap-2"):
+            for label, value in operation_cards:
+                with ui.card().classes("metric-card w-full"):
+                    with ui.row().classes("metric-row w-full items-center justify-between no-wrap"):
+                        ui.label(label).classes("metric-label")
+                        ui.label(value).classes("metric-value")
+        ui.label("실행 가능성 점검").classes("font-bold")
+        for warning in execution_warnings(result):
+            ui.label(f"• {warning}").classes("text-sm")
+        for title, frame in (
+            ("연도별 성과", annual_performance(result)),
+            ("기간·시장국면 검증", period_validation(result)),
+        ):
+            ui.label(title).classes("font-bold mt-2")
+            display_frame = frame.copy()
+            for column in ("수익률", "MDD", "평균 현금비중"):
+                if column in display_frame:
+                    display_frame[column] = display_frame[column].map(
+                        lambda value: f"{float(value):.2%}"
+                    )
+            ui.table(
+                columns=_table_columns(list(display_frame.columns)),
+                rows=display_frame.to_dict("records"),
+                pagination={"rowsPerPage": 10},
+            ).props("flat bordered dense").classes("w-full account-table")
     ui.label("체결 내역").classes("section-title")
     display = result["trades"].copy()
-    for column in ("시뮬레이션 체결가", "체결금액", "실현손익", "체결 후 현금잔액"):
+    for column in (
+        "시뮬레이션 체결가", "체결금액", "실현손익", "체결 후 현금잔액",
+        "거래비용",
+    ):
         display[column] = display[column].map(
             lambda value: "" if pd.isna(value) else _number(float(value), country)
         )
@@ -146,11 +195,17 @@ def _optimization_table(frame: pd.DataFrame, country: str) -> pd.DataFrame:
     for column in ("최종 평가액", "최종 현금", "회당 매수금액"):
         if column in display:
             display[column] = display[column].map(lambda value: _number(value, country))
-    for column in ("총수익률", "MDD", "현재 낙폭", "매수·매도율"):
+    for column in (
+        "총수익률", "MDD", "현재 낙폭", "매수·매도율", "수익 거래 비율",
+        "평균 투자집행률", "평균 현금비중",
+    ):
         if column in display:
             display[column] = display[column].map(lambda value: f"{float(value):.2%}")
     if "수익률/MDD" in display:
         display["수익률/MDD"] = display["수익률/MDD"].map(lambda value: f"{float(value):.2f}")
+    for column in ("개별 종합점수", "안정구간 점수"):
+        if column in display:
+            display[column] = display[column].map(lambda value: f"{float(value):.1f}")
     return display
 
 
@@ -300,12 +355,15 @@ def _render_result_preview(result: dict, country: str) -> None:
 
 def _best_heatmap_condition(
     optimization: dict, metric: str, title: str, country: str,
+    on_save: Callable[[dict, dict], None] | None = None,
 ) -> None:
     frame = optimization["table"]
     best = frame.loc[frame[metric].astype(float).idxmax()]
     value = (
         f"{float(best[metric]):.2%}"
         if metric in {"총수익률", "MDD"}
+        else f"{float(best[metric]):.1f}점"
+        if metric == "안정구간 점수"
         else f"{float(best[metric]):.2f}"
     )
     with ui.card().classes("metric-card w-full"):
@@ -329,6 +387,11 @@ def _best_heatmap_condition(
                 toggle.on(
                     "click", lambda: detail.set_value(not bool(detail.value)),
                 )
+                if on_save is not None:
+                    ui.button(
+                        "조건 비교함에 저장", icon="bookmark_add",
+                        on_click=lambda: on_save(best.to_dict(), preview_result),
+                    ).props("outline no-caps").classes("w-full")
 
 
 def _allocation_chart(optimization: dict) -> None:
@@ -349,6 +412,7 @@ def _allocation_chart(optimization: dict) -> None:
 
 def _render_optimization(
     optimization: dict, country: str, symbol_label: str, mode: str,
+    on_save: Callable[[dict, dict], None] | None = None,
 ) -> None:
     ui.label(f"{symbol_label} 조건 비교 결과").classes("section-title")
     ui.label(
@@ -359,21 +423,24 @@ def _render_optimization(
         _paired_rate_chart(optimization)
     elif mode == "combined":
         _best_heatmap_condition(
-            optimization, "총수익률", "총수익률", country,
+            optimization, "안정구간 점수", "안정 구간 추천", country, on_save,
+        )
+        _best_heatmap_condition(
+            optimization, "총수익률", "총수익률", country, on_save,
         )
         _combined_heatmap(
             optimization, "총수익률",
             "회당 매수금액 × 매수·매도율 · 총수익률", country,
         )
         _best_heatmap_condition(
-            optimization, "MDD", "MDD", country,
+            optimization, "MDD", "MDD", country, on_save,
         )
         _combined_heatmap(
             optimization, "MDD",
             "회당 매수금액 × 매수·매도율 · MDD", country,
         )
         _best_heatmap_condition(
-            optimization, "수익률/MDD", "수익률/MDD", country,
+            optimization, "수익률/MDD", "수익률/MDD", country, on_save,
         )
         _combined_heatmap(
             optimization, "수익률/MDD",
@@ -507,10 +574,38 @@ def split_trading_page() -> None:
                 ),
                 label="수량 방식",
             ).props("outlined").classes("w-full")
+            with ui.expansion("현실 비용 반영 (선택)", icon="payments").classes(
+                "strategy-expansion w-full"
+            ):
+                ui.label("모든 값은 체결금액 대비 비율이며 기본값 0%입니다.").classes(
+                    "text-xs text-grey-6"
+                )
+                with ui.row().classes("backtest-field-grid w-full"):
+                    buy_fee = ui.number(
+                        "매수수수료(%)", value=float(saved.get("buy_fee", 0)),
+                        min=0, max=99, step=.01,
+                    ).props("outlined").classes("control-grow")
+                    sell_fee = ui.number(
+                        "매도수수료(%)", value=float(saved.get("sell_fee", 0)),
+                        min=0, max=99, step=.01,
+                    ).props("outlined").classes("control-grow")
+                    sell_tax = ui.number(
+                        "매도세금(%)", value=float(saved.get("sell_tax", 0)),
+                        min=0, max=99, step=.01,
+                    ).props("outlined").classes("control-grow")
+                    slippage = ui.number(
+                        "슬리피지(%)", value=float(saved.get("slippage", 0)),
+                        min=0, max=99, step=.01,
+                    ).props("outlined").classes("control-grow")
+                    fx_cost = ui.number(
+                        "환전비용(%)", value=float(saved.get("fx_cost", 0)),
+                        min=0, max=99, step=.01,
+                    ).props("outlined").classes("control-grow")
             currency_help = ui.label("").classes("text-xs text-grey-6")
             run_button = ui.button("백테스트 실행", icon="play_arrow").classes("primary-action w-full")
 
         status = ui.label("조건을 입력한 뒤 실행하세요.").classes("status-text")
+        comparison_area = ui.column().classes("w-full gap-3")
         result_area = ui.column().classes("w-full gap-4")
 
         def persist_form() -> None:
@@ -535,6 +630,11 @@ def split_trading_page() -> None:
                 "rate_min": float(rate_min.value or 0),
                 "rate_max": float(rate_max.value or 0),
                 "quantity_mode": str(quantity_mode.value),
+                "buy_fee": float(buy_fee.value or 0),
+                "sell_fee": float(sell_fee.value or 0),
+                "sell_tax": float(sell_tax.value or 0),
+                "slippage": float(slippage.value or 0),
+                "fx_cost": float(fx_cost.value or 0),
             }
 
         def update_currency_inputs() -> None:
@@ -623,6 +723,81 @@ def split_trading_page() -> None:
             update_dynamic_controls()
             persist_form()
 
+        def render_comparison_box() -> None:
+            comparison_area.clear()
+            raw_items = app.storage.user.get(COMPARISON_STORAGE_KEY, [])
+            items = raw_items if isinstance(raw_items, list) else []
+            if not items:
+                return
+            with comparison_area:
+                with ui.expansion(
+                    f"조건 비교함 · {len(items)}개", icon="compare_arrows", value=True,
+                ).classes("strategy-expansion w-full"):
+                    chart_series = []
+                    rows = []
+                    for index, item in enumerate(items):
+                        restored = deserialize_result(item["result"])
+                        chart_series.append({
+                            "name": item["name"], "type": "line", "showSymbol": False,
+                            "data": [
+                                [timestamp.isoformat(), round(float(value), 2)]
+                                for timestamp, value in restored["split_nav"].items()
+                            ],
+                        })
+                        rows.append({
+                            "조건": item["name"],
+                            "총수익률": f"{float(item['return']):.2%}",
+                            "MDD": f"{float(item['mdd']):.2%}",
+                            "수익률/MDD": f"{float(item['return_mdd']):.2f}",
+                            "안정점수": f"{float(item.get('stability', 0)):.1f}",
+                        })
+                    ui.echart({
+                        "tooltip": {"trigger": "axis"}, "legend": {"bottom": 0, "type": "scroll"},
+                        "grid": {"left": 70, "right": 20, "top": 20, "bottom": 72},
+                        "xAxis": {"type": "time"}, "yAxis": {"type": "value", "scale": True},
+                        "dataZoom": [{"type": "inside"}], "series": chart_series,
+                    }).classes("dashboard-chart w-full")
+                    ui.table(
+                        columns=_table_columns(list(rows[0])), rows=rows,
+                        pagination={"rowsPerPage": 8},
+                    ).props("flat bordered dense").classes("w-full account-table")
+                    with ui.row().classes("w-full gap-2"):
+                        for index, item in enumerate(items):
+                            def remove(saved_index: int = index) -> None:
+                                current = list(app.storage.user.get(COMPARISON_STORAGE_KEY, []))
+                                if 0 <= saved_index < len(current):
+                                    current.pop(saved_index)
+                                app.storage.user[COMPARISON_STORAGE_KEY] = current
+                                render_comparison_box()
+                            ui.button(
+                                f"{index + 1}번 삭제", icon="delete", on_click=remove,
+                            ).props("flat dense no-caps")
+
+        def save_comparison(
+            row: dict, result: dict, selected_country: str,
+            label: str, conditions: dict,
+        ) -> None:
+            count = int(row["동시 보유 차수"])
+            rate = float(row["매수·매도율"])
+            name = f"{label.split(' · ', 1)[0]} · {count}회 · {rate:.0%}"
+            item = {
+                "key": (
+                    f"{label}|{conditions.get('요청 기간')}|{count}|{rate:.8f}|"
+                    f"{conditions.get('수량 방식')}|{conditions.get('비용 설정')}"
+                ),
+                "name": name, "country": selected_country,
+                "return": float(row["총수익률"]), "mdd": float(row["MDD"]),
+                "return_mdd": float(row["수익률/MDD"]),
+                "stability": float(row.get("안정구간 점수", 0)),
+                "result": serialize_result(result),
+            }
+            items = list(app.storage.user.get(COMPARISON_STORAGE_KEY, []))
+            items = [saved for saved in items if saved.get("key") != item["key"]]
+            items.append(item)
+            app.storage.user[COMPARISON_STORAGE_KEY] = items[-8:]
+            render_comparison_box()
+            ui.notify("조건 비교함에 저장했습니다.", type="positive")
+
         def show_output(
             result: dict | None,
             optimization: dict | None,
@@ -641,6 +816,9 @@ def split_trading_page() -> None:
                 elif optimization is not None:
                     _render_optimization(
                         optimization, selected_country, label, selected_test_mode,
+                        lambda row, winner: save_comparison(
+                            row, winner, selected_country, label, conditions,
+                        ),
                     )
                 if optimization is None and result is not None:
                     export_status = ui.label(
@@ -709,6 +887,11 @@ def split_trading_page() -> None:
                 config = SplitTradingConfig(
                     capital, tranche, buy, sell, selected_quantity_mode,
                     base_slot_count,
+                    float(buy_fee.value or 0) / 100,
+                    float(sell_fee.value or 0) / 100,
+                    float(sell_tax.value or 0) / 100,
+                    float(slippage.value or 0) / 100,
+                    float(fx_cost.value or 0) / 100,
                 )
                 symbol = str(symbol_select.value)
                 close = await run.io_bound(load_adjusted_close, symbol, start, end)
@@ -790,7 +973,13 @@ def split_trading_page() -> None:
                         "1주 단위 정수 매매" if selected_quantity_mode == "whole"
                         else "금액 기준 소수점 매매(6자리)"
                     ),
-                    "수수료·세금": 0,
+                    "비용 설정": (
+                        f"매수 {float(buy_fee.value or 0):g}% · "
+                        f"매도 {float(sell_fee.value or 0):g}% · "
+                        f"세금 {float(sell_tax.value or 0):g}% · "
+                        f"슬리피지 {float(slippage.value or 0):g}% · "
+                        f"환전 {float(fx_cost.value or 0):g}%"
+                    ),
                 }
                 state.update(
                     result=result, conditions=conditions, symbol_label=label,
@@ -843,12 +1032,13 @@ def split_trading_page() -> None:
         for control in (
             test_mode,
             initial_raw, count_custom, rate_preset, rate_custom, quantity_mode,
-            rate_min, rate_max,
+            rate_min, rate_max, buy_fee, sell_fee, sell_tax, slippage, fx_cost,
         ):
             control.on_value_change(lambda _: update_dynamic_controls())
         run_button.on("click", execute)
         state["restoring"] = False
         update_dynamic_controls()
+        render_comparison_box()
         saved_output = app.storage.user.get(LAST_RESULT_STORAGE_KEY)
         if isinstance(saved_output, dict) and saved_output.get("version") == 1:
             try:
