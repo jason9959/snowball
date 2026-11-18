@@ -36,6 +36,7 @@ class ModularLayoutTests(unittest.TestCase):
         ]
         self.assertEqual(page_functions, [])
         self.assertLessEqual(len(source.splitlines()), 45)
+        self.assertIn('NICEGUI_RECONNECT_TIMEOUT", "600"', source)
         for name in (
             "snowball01_individual_backtest",
             "snowball02_portfolio_mix",

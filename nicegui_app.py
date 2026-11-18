@@ -31,5 +31,8 @@ if __name__ in {"__main__", "__mp_main__"}:
         host="0.0.0.0",
         port=int(os.getenv("PORT", "8080")),
         reload=os.getenv("NICEGUI_RELOAD", "0") == "1",
+        # Mobile browsers suspend WebSockets while another app is in front.
+        # Retain the page client so a short app switch does not rebuild the UI.
+        reconnect_timeout=float(os.getenv("NICEGUI_RECONNECT_TIMEOUT", "600")),
         storage_secret=os.getenv("NICEGUI_STORAGE_SECRET", "snowball-local-development"),
     )
