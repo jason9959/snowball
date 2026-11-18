@@ -214,6 +214,14 @@ def _combined_heatmap(
         for row in condition_rows.to_dict("records")
     }
     rates = sorted(frame["매수·매도율"].unique())
+    expected_cells = len(conditions) * len(rates)
+    unique_cells = frame[["분할 조건", "매수·매도율"]].drop_duplicates()
+    if len(frame) != expected_cells or len(unique_cells) != expected_cells:
+        raise ValueError(
+            "히트맵 조합 수가 올바르지 않습니다: "
+            f"{len(conditions)}개 횟수 × {len(rates)}개 비율 = "
+            f"{expected_cells}개여야 하지만 {len(frame)}개가 계산되었습니다."
+        )
     condition_pos = {value: index for index, value in enumerate(conditions)}
     rate_pos = {value: index for index, value in enumerate(rates)}
     data = [
@@ -227,6 +235,10 @@ def _combined_heatmap(
         visual_min -= 1
         visual_max += 1
     ui.label(title).classes("section-title")
+    ui.label(
+        f"{len(conditions)}개 분할횟수 × {len(rates)}개 매수·매도율 "
+        f"= 총 {expected_cells}개 조건"
+    ).classes("text-sm text-grey-6")
     ui.echart({
         "tooltip": {"position": "top"},
         "grid": {"left": 96, "right": 24, "top": 24, "bottom": 70},
@@ -236,7 +248,7 @@ def _combined_heatmap(
             "data": [amount_labels[value] for value in conditions],
         },
         "visualMap": {
-            "min": visual_min, "max": visual_max, "calculable": True,
+            "min": visual_min, "max": visual_max, "calculable": False,
             "orient": "horizontal", "left": "center", "bottom": 0,
             "inRange": {"color": ["#d95c5c", "#fff7f7", "#f3fbf5", "#3f9b65"]},
         },

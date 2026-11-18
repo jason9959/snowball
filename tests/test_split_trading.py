@@ -83,6 +83,8 @@ class SplitTradingTests(unittest.TestCase):
         self.assertIn('LAST_RESULT_STORAGE_KEY', source)
         self.assertIn('else "whole"', source)
         self.assertIn('_best_heatmap_condition(', source)
+        self.assertIn('"calculable": False', source)
+        self.assertIn('expected_cells = len(conditions) * len(rates)', source)
 
     def test_rate_sweep_uses_five_percentage_point_steps_and_includes_maximum(self):
         self.assertEqual(rate_sweep(10, 30), [.10, .15, .20, .25, .30])
