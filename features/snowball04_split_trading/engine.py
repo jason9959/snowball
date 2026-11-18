@@ -23,6 +23,7 @@ class SplitTradingConfig:
     buy_drop: float
     sell_rise: float
     quantity_mode: str = "fractional_6"
+    slot_count: int | None = None
 
     def validate(self) -> None:
         if self.initial_capital <= 0 or self.tranche_amount <= 0:
@@ -35,11 +36,15 @@ class SplitTradingConfig:
             raise ValueError("매도 상승률은 0%보다 커야 합니다.")
         if self.quantity_mode not in {"whole", "fractional_6"}:
             raise ValueError("지원하지 않는 수량 방식입니다.")
+        if self.slot_count is not None and self.slot_count < 1:
+            raise ValueError("분할횟수는 1 이상의 정수여야 합니다.")
         if self.max_slots > 1_000:
             raise ValueError("동시 보유 차수는 최대 1,000차까지 계산할 수 있습니다.")
 
     @property
     def max_slots(self) -> int:
+        if self.slot_count is not None:
+            return int(self.slot_count)
         return max(1, int(self.initial_capital // self.tranche_amount))
 
 

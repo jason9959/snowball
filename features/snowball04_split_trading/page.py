@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import date, datetime
+import math
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -12,7 +13,12 @@ from nicegui import app, run, ui
 from common.snowball.layout import shell
 from .data import load_adjusted_close, search_symbols
 from .engine import SplitTradingConfig, run_split_backtest
-from .optimization import CRITERIA, run_ratio_sweep, run_tranche_sweep
+from .optimization import (
+    CRITERIA,
+    run_combined_sweep,
+    run_ratio_sweep,
+    run_tranche_sweep,
+)
 from .sheets import connect_spreadsheet, export_result
 
 
@@ -26,6 +32,13 @@ def _money(value: float, country: str) -> str:
 def _actual_money(raw_value: float, country: str) -> float:
     """Interpret the input directly in the selected market currency."""
     return round(float(raw_value), 0 if country == "한국" else 2)
+
+
+def _tranche_from_count(capital: float, count: int, country: str) -> float:
+    if count < 1:
+        raise ValueError("분할횟수는 1 이상의 정수여야 합니다.")
+    unit = 1 if country == "한국" else .01
+    return math.floor((capital / count + 1e-12) / unit) * unit
 
 
 def _number(value: float, country: str) -> str:
@@ -129,14 +142,12 @@ def _render_result(result: dict, country: str, symbol_label: str) -> None:
         columns=_table_columns(list(display.columns)),
         rows=display.fillna("").to_dict("records"), pagination={"rowsPerPage": 15},
     ).props("flat bordered dense").classes("w-full account-table")
-
-
 def _optimization_table(frame: pd.DataFrame, country: str) -> pd.DataFrame:
     display = frame.copy()
     for column in ("최종 평가액", "최종 현금", "회당 매수금액"):
         if column in display:
             display[column] = display[column].map(lambda value: _number(value, country))
-    for column in ("총수익률", "MDD", "현재 낙폭", "매수 하락률", "매도 상승률"):
+    for column in ("총수익률", "MDD", "현재 낙폭", "매수·매도율"):
         if column in display:
             display[column] = display[column].map(lambda value: f"{float(value):.2%}")
     if "수익률/MDD" in display:
@@ -152,11 +163,10 @@ def _top_strategy_chart(optimization: dict, country: str) -> None:
     series = []
     for rank, item in enumerate(top, start=1):
         parameters = item["parameters"]
-        if "매수 하락률" in parameters:
-            name = (
-                f"{rank}위 · 매수 {parameters['매수 하락률']:.0%} / "
-                f"매도 {parameters['매도 상승률']:.0%}"
-            )
+        if "분할 조건" in parameters and "매수·매도율" in parameters:
+            name = f"{rank}위 · {parameters['분할 조건']} / {parameters['매수·매도율']:.0%}"
+        elif "매수·매도율" in parameters:
+            name = f"{rank}위 · ±{parameters['매수·매도율']:.0%}"
         else:
             name = f"{rank}위 · {parameters['분할 조건']}"
         series.append({
@@ -174,14 +184,42 @@ def _top_strategy_chart(optimization: dict, country: str) -> None:
     }).classes("dashboard-chart w-full")
 
 
-def _ratio_heatmap(optimization: dict) -> None:
+def _paired_rate_chart(optimization: dict) -> None:
+    frame = optimization["table"].sort_values("매수·매도율")
+    labels = [f"{value:.0%}" for value in frame["매수·매도율"]]
+    ui.label("매수·매도율별 수익률과 MDD").classes("section-title")
+    ui.echart({
+        "tooltip": {"trigger": "axis"}, "legend": {"bottom": 0},
+        "grid": {"left": 58, "right": 24, "top": 24, "bottom": 64},
+        "xAxis": {"type": "category", "name": "매수·매도율", "data": labels},
+        "yAxis": {"type": "value", "axisLabel": {"formatter": "{value}%"}},
+        "series": [
+            {"name": "총수익률", "type": "line", "data": (frame["총수익률"] * 100).round(2).tolist()},
+            {"name": "MDD", "type": "line", "data": (frame["MDD"] * 100).round(2).tolist()},
+        ],
+    }).classes("monthly-distribution w-full")
+
+
+def _combined_heatmap(
+    optimization: dict, metric: str, title: str, country: str,
+) -> None:
     frame = optimization["table"]
-    buys = sorted(frame["매수 하락률"].unique())
-    sells = sorted(frame["매도 상승률"].unique())
-    buy_pos = {value: index for index, value in enumerate(buys)}
-    sell_pos = {value: index for index, value in enumerate(sells)}
+    condition_rows = (
+        frame[["분할 조건", "회당 매수금액", "동시 보유 차수"]]
+        .drop_duplicates("분할 조건")
+        .sort_values("동시 보유 차수")
+    )
+    conditions = condition_rows["분할 조건"].tolist()
+    amount_labels = {
+        row["분할 조건"]: f"{row['분할 조건']} · {_number(row['회당 매수금액'], country)}"
+        for row in condition_rows.to_dict("records")
+    }
+    rates = sorted(frame["매수·매도율"].unique())
+    condition_pos = {value: index for index, value in enumerate(conditions)}
+    rate_pos = {value: index for index, value in enumerate(rates)}
     data = [
-        [buy_pos[row["매수 하락률"]], sell_pos[row["매도 상승률"]], round(row["총수익률"] * 100, 2)]
+        [rate_pos[row["매수·매도율"]], condition_pos[row["분할 조건"]],
+         round(float(row[metric]) * (100 if metric in {"총수익률", "MDD"} else 1), 2)]
         for row in frame.to_dict("records")
     ]
     values = [item[2] for item in data]
@@ -189,22 +227,22 @@ def _ratio_heatmap(optimization: dict) -> None:
     if visual_min == visual_max:
         visual_min -= 1
         visual_max += 1
-    ui.label("매수·매도 비율별 총수익률").classes("section-title")
+    ui.label(title).classes("section-title")
     ui.echart({
         "tooltip": {"position": "top"},
-        "grid": {"left": 64, "right": 24, "top": 24, "bottom": 70},
-        "xAxis": {"type": "category", "name": "매수 하락률", "data": [f"{v:.0%}" for v in buys]},
-        "yAxis": {"type": "category", "name": "매도 상승률", "data": [f"{v:.0%}" for v in sells]},
+        "grid": {"left": 96, "right": 24, "top": 24, "bottom": 70},
+        "xAxis": {"type": "category", "name": "매수·매도율", "data": [f"{v:.0%}" for v in rates]},
+        "yAxis": {
+            "type": "category", "name": "회당 매수금액",
+            "data": [amount_labels[value] for value in conditions],
+        },
         "visualMap": {
             "min": visual_min, "max": visual_max, "calculable": True,
             "orient": "horizontal", "left": "center", "bottom": 0,
             "inRange": {"color": ["#d95c5c", "#fff7f7", "#f3fbf5", "#3f9b65"]},
         },
-        "series": [{
-            "type": "heatmap", "data": data,
-            "label": {"show": True, "formatter": "{@[2]}%"},
-        }],
-    }).classes("monthly-heatmap w-full")
+        "series": [{"type": "heatmap", "data": data, "label": {"show": True}}],
+    }).classes("w-full").style(f"height: {max(460, len(conditions) * 34 + 140)}px")
 
 
 def _allocation_chart(optimization: dict) -> None:
@@ -227,14 +265,33 @@ def _render_optimization(
     optimization: dict, country: str, symbol_label: str, mode: str,
 ) -> None:
     parameters = optimization["best_parameters"]
+    def parameter_text(key: str, value: object) -> str:
+        if key == "회당 매수금액":
+            return f"{key} {_money(float(value), country)}"
+        if "율" in key and isinstance(value, (int, float)):
+            return f"{key} {float(value):.2%}"
+        return f"{key} {value}"
+
     ui.label(f"{symbol_label} 최적화 결과").classes("section-title")
     ui.label(
         f"최적화 기준 · {CRITERIA[optimization['criterion']]} · 최적 조건 · "
-        + " / ".join(f"{key} {value:.2%}" if isinstance(value, float) and "률" in key
-                     else f"{key} {value}" for key, value in parameters.items())
+        + " / ".join(parameter_text(key, value) for key, value in parameters.items())
     ).classes("page-subtitle")
     if mode == "ratio":
-        _ratio_heatmap(optimization)
+        _paired_rate_chart(optimization)
+    elif mode == "combined":
+        _combined_heatmap(
+            optimization, "총수익률",
+            "회당 매수금액 × 매수·매도율 · 총수익률", country,
+        )
+        _combined_heatmap(
+            optimization, "MDD",
+            "회당 매수금액 × 매수·매도율 · MDD", country,
+        )
+        _combined_heatmap(
+            optimization, "수익률/MDD",
+            "회당 매수금액 × 매수·매도율 · 수익률/MDD", country,
+        )
     else:
         _allocation_chart(optimization)
     _top_strategy_chart(optimization, country)
@@ -244,6 +301,13 @@ def _render_optimization(
         columns=_table_columns(list(display.columns)),
         rows=display.fillna("").to_dict("records"), pagination={"rowsPerPage": 15},
     ).props("flat bordered dense").classes("w-full account-table")
+    ui.button(
+        "최적화 전체 결과 CSV", icon="download",
+        on_click=lambda: ui.download.content(
+            optimization["table"].to_csv(index=False).encode("utf-8-sig"),
+            filename="split_trading_optimization.csv", media_type="text/csv",
+        ),
+    ).props("outline no-caps")
     with ui.expansion("1위 조건 상세 결과", icon="emoji_events", value=True).classes(
         "strategy-expansion w-full"
     ):
@@ -266,7 +330,7 @@ def split_trading_page() -> None:
     if saved_period not in {*map(str, range(1, 11)), "custom"}:
         saved_period = "3"
     saved_test_mode = str(saved.get("test_mode", "single"))
-    if saved_test_mode not in {"single", "ratio", "allocation"}:
+    if saved_test_mode not in {"single", "ratio", "allocation", "combined"}:
         saved_test_mode = "single"
     saved_criterion = str(saved.get("criterion", "return"))
     if saved_criterion not in CRITERIA:
@@ -288,7 +352,8 @@ def split_trading_page() -> None:
                 {
                     "single": "단일 백테스트",
                     "ratio": "매수·매도 비율 최적화",
-                    "allocation": "분할횟수·회당금액 최적화",
+                    "allocation": "분할횟수 최적화",
+                    "combined": "통합 최적화 · 횟수 × 매수·매도율",
                 },
                 value=saved_test_mode, label="테스트 유형",
             ).props("outlined").classes("w-full")
@@ -322,67 +387,21 @@ def split_trading_page() -> None:
                 initial_raw = ui.number(
                     "최초 투자총액", value=float(saved.get("initial", 10_000_000)), min=.01, step=1,
                 ).props("outlined").classes("control-grow")
-                split_method = ui.select(
-                    ["금액", "횟수"], value=str(saved.get("split_method", "횟수")), label="분할 방식",
-                ).props("outlined").classes("control-grow")
-                amount_raw = ui.number(
-                    "금액 방식 · 회당 매수금액", value=float(saved.get("amount", 1_000_000)),
-                    min=.01, step=1,
-                ).props("outlined").classes("control-grow")
-                count_preset = ui.select(
-                    ["직접입력", *range(1, 11)], value=saved.get("count_preset", 10),
-                    label="횟수 방식",
-                ).props("outlined").classes("control-grow")
                 count_custom = ui.number(
-                    "직접 분할횟수", value=int(saved.get("count_custom", 10)), min=1, step=1,
+                    "분할횟수", value=int(saved.get("count_custom", 10)), min=1, max=1_000, step=1,
                 ).props("outlined").classes("control-grow")
             tranche_display = ui.input("계산된 회당 매수금액").props("outlined readonly").classes("w-full")
             with ui.row().classes("backtest-field-grid w-full"):
-                buy_preset = ui.select(
-                    ["직접입력", 5, 10, 15, 20, 25, 30], value=saved.get("buy_preset", 10),
-                    label="매수 하락률",
+                rate_preset = ui.select(
+                    ["직접입력", *range(5, 51, 5)], value=saved.get("rate_preset", 10),
+                    label="매수·매도율",
                 ).props("outlined").classes("control-grow")
-                buy_custom = ui.number(
-                    "직접 매수 하락률(%)", value=float(saved.get("buy_custom", 10)),
+                rate_custom = ui.number(
+                    "직접 매수·매도율(%)", value=float(saved.get("rate_custom", 10)),
                     min=.01, max=99.99, step=.1,
                 ).props("outlined").classes("control-grow")
-                sell_preset = ui.select(
-                    ["직접입력", 5, 10, 15, 20, 25, 30], value=saved.get("sell_preset", 10),
-                    label="매도 상승률",
-                ).props("outlined").classes("control-grow")
-                sell_custom = ui.number(
-                    "직접 매도 상승률(%)", value=float(saved.get("sell_custom", 10)),
-                    min=.01, step=.1,
-                ).props("outlined").classes("control-grow")
-            with ui.card().classes("editor-section w-full") as ratio_sweep_card:
-                ui.label("비율 최적화 범위").classes("font-bold")
-                with ui.row().classes("backtest-field-grid w-full"):
-                    buy_min = ui.number(
-                        "매수 하락률 최소(%)", value=float(saved.get("buy_min", 5)),
-                        min=.01, max=99.99, step=.5,
-                    ).props("outlined").classes("control-grow")
-                    buy_max = ui.number(
-                        "매수 하락률 최대(%)", value=float(saved.get("buy_max", 30)),
-                        min=.01, max=99.99, step=.5,
-                    ).props("outlined").classes("control-grow")
-                    buy_step = ui.number(
-                        "매수 간격(%p)", value=float(saved.get("buy_step", 5)),
-                        min=.01, max=99, step=.5,
-                    ).props("outlined").classes("control-grow")
-                    sell_min = ui.number(
-                        "매도 상승률 최소(%)", value=float(saved.get("sell_min", 5)),
-                        min=.01, step=.5,
-                    ).props("outlined").classes("control-grow")
-                    sell_max = ui.number(
-                        "매도 상승률 최대(%)", value=float(saved.get("sell_max", 30)),
-                        min=.01, step=.5,
-                    ).props("outlined").classes("control-grow")
-                    sell_step = ui.number(
-                        "매도 간격(%p)", value=float(saved.get("sell_step", 5)),
-                        min=.01, step=.5,
-                    ).props("outlined").classes("control-grow")
             with ui.card().classes("editor-section w-full") as allocation_sweep_card:
-                ui.label("분할 규모 최적화 범위").classes("font-bold")
+                ui.label("분할횟수 최적화 범위").classes("font-bold")
                 with ui.row().classes("backtest-field-grid w-full"):
                     count_min = ui.number(
                         "최소 분할횟수", value=int(saved.get("count_min", 2)), min=1, step=1,
@@ -392,18 +411,6 @@ def split_trading_page() -> None:
                     ).props("outlined").classes("control-grow")
                     count_step = ui.number(
                         "횟수 간격", value=int(saved.get("count_step", 1)), min=1, step=1,
-                    ).props("outlined").classes("control-grow")
-                    amount_min = ui.number(
-                        "최소 회당금액", value=float(saved.get("amount_min", 100_000)),
-                        min=.01, step=1,
-                    ).props("outlined").classes("control-grow")
-                    amount_max = ui.number(
-                        "최대 회당금액", value=float(saved.get("amount_max", 2_000_000)),
-                        min=.01, step=1,
-                    ).props("outlined").classes("control-grow")
-                    amount_step = ui.number(
-                        "금액 간격", value=float(saved.get("amount_step", 100_000)),
-                        min=.01, step=1,
                     ).props("outlined").classes("control-grow")
             quantity_mode = ui.select(
                 {
@@ -434,26 +441,12 @@ def split_trading_page() -> None:
                 "start": str(start_input.value),
                 "end": str(end_input.value),
                 "initial": float(initial_raw.value or 0),
-                "split_method": str(split_method.value),
-                "amount": float(amount_raw.value or 0),
-                "count_preset": count_preset.value,
                 "count_custom": int(count_custom.value or 1),
-                "buy_preset": buy_preset.value,
-                "buy_custom": float(buy_custom.value or 0),
-                "sell_preset": sell_preset.value,
-                "sell_custom": float(sell_custom.value or 0),
-                "buy_min": float(buy_min.value or 0),
-                "buy_max": float(buy_max.value or 0),
-                "buy_step": float(buy_step.value or 0),
-                "sell_min": float(sell_min.value or 0),
-                "sell_max": float(sell_max.value or 0),
-                "sell_step": float(sell_step.value or 0),
+                "rate_preset": rate_preset.value,
+                "rate_custom": float(rate_custom.value or 0),
                 "count_min": int(count_min.value or 1),
                 "count_max": int(count_max.value or 1),
                 "count_step": int(count_step.value or 1),
-                "amount_min": float(amount_min.value or 0),
-                "amount_max": float(amount_max.value or 0),
-                "amount_step": float(amount_step.value or 0),
                 "quantity_mode": str(quantity_mode.value),
             }
 
@@ -461,13 +454,12 @@ def split_trading_page() -> None:
             is_us = country.value == "미국"
             step = .01 if is_us else 1
             digits = 2 if is_us else 0
-            for control in (initial_raw, amount_raw, amount_min, amount_max, amount_step):
+            for control in (initial_raw,):
                 if control.value is not None:
                     normalized = round(float(control.value), digits)
                     if float(control.value) != normalized:
                         control.value = normalized
             initial_raw.props(f"step={step}")
-            amount_raw.props(f"step={step}")
             currency_help.set_text(
                 "달러 금액은 USD를 직접 입력하며 소수점 둘째 자리까지 사용할 수 있습니다."
                 if is_us else
@@ -477,36 +469,22 @@ def split_trading_page() -> None:
         def update_dynamic_controls() -> None:
             update_currency_inputs()
             mode = str(test_mode.value)
-            amount_mode = split_method.value == "금액"
-            optimizing_allocation = mode == "allocation"
-            fixed_ratio = mode != "ratio"
+            optimizing_counts = mode in {"allocation", "combined"}
+            fixed_ratio = mode in {"single", "allocation"}
             criterion.set_visibility(mode != "single")
-            ratio_sweep_card.set_visibility(mode == "ratio")
-            allocation_sweep_card.set_visibility(optimizing_allocation)
-            amount_raw.set_visibility(amount_mode and not optimizing_allocation)
-            count_preset.set_visibility(not amount_mode and not optimizing_allocation)
-            count_custom.set_visibility(
-                not amount_mode and not optimizing_allocation
-                and count_preset.value == "직접입력"
+            allocation_sweep_card.set_visibility(optimizing_counts)
+            count_custom.set_visibility(not optimizing_counts)
+            tranche_display.set_visibility(not optimizing_counts)
+            rate_preset.set_visibility(fixed_ratio)
+            rate_custom.set_visibility(
+                fixed_ratio and rate_preset.value == "직접입력"
             )
-            tranche_display.set_visibility(not optimizing_allocation)
-            buy_preset.set_visibility(fixed_ratio)
-            sell_preset.set_visibility(fixed_ratio)
-            buy_custom.set_visibility(fixed_ratio and buy_preset.value == "직접입력")
-            sell_custom.set_visibility(fixed_ratio and sell_preset.value == "직접입력")
-            count_min.set_visibility(not amount_mode)
-            count_max.set_visibility(not amount_mode)
-            count_step.set_visibility(not amount_mode)
-            amount_min.set_visibility(amount_mode)
-            amount_max.set_visibility(amount_mode)
-            amount_step.set_visibility(amount_mode)
             raw_total = float(initial_raw.value or 0)
-            if amount_mode:
-                raw_tranche = float(amount_raw.value or 0)
-            else:
-                count_value = int(count_custom.value or 1) if count_preset.value == "직접입력" else int(count_preset.value or 1)
-                raw_tranche = raw_total / max(1, count_value)
-            tranche_display.value = _money(_actual_money(raw_tranche, str(country.value)), str(country.value))
+            count_value = int(count_custom.value or 1)
+            raw_tranche = _tranche_from_count(
+                raw_total, max(1, count_value), str(country.value),
+            )
+            tranche_display.value = _money(raw_tranche, str(country.value))
             run_button.set_text(
                 "백테스트 실행" if mode == "single" else "최적화 실행"
             )
@@ -574,26 +552,32 @@ def split_trading_page() -> None:
                 selected_country = str(country.value)
                 selected_test_mode = str(test_mode.value)
                 capital = _actual_money(float(initial_raw.value or 0), selected_country)
-                if split_method.value == "금액" and selected_test_mode != "allocation":
-                    tranche = _actual_money(float(amount_raw.value or 0), selected_country)
-                    split_input = f"금액 · {_money(tranche, selected_country)}"
-                elif split_method.value == "횟수" and selected_test_mode != "allocation":
-                    count_value = int(count_custom.value or 1) if count_preset.value == "직접입력" else int(count_preset.value or 1)
+                if selected_test_mode in {"single", "ratio"}:
+                    count_value = int(count_custom.value or 1)
                     if count_value < 1:
                         raise ValueError("분할횟수는 1 이상의 정수여야 합니다.")
-                    tranche = _actual_money(capital / count_value, selected_country)
-                    split_input = f"횟수 · {count_value}회"
+                    tranche = _tranche_from_count(capital, count_value, selected_country)
+                    split_input = f"{count_value}회 · 회당 {_money(tranche, selected_country)}"
+                    base_slot_count = count_value
                 else:
                     tranche = capital
-                    split_input = f"{split_method.value} 범위 최적화"
-                if selected_test_mode == "ratio":
-                    buy = sell = .10
+                    base_slot_count = 1
+                    split_input = (
+                        f"{int(count_min.value or 1)}~{int(count_max.value or 1)}회 "
+                        f"· {int(count_step.value or 1)}회 간격"
+                    )
+                if selected_test_mode in {"ratio", "combined"}:
+                    rate = .10
                 else:
-                    buy = float(buy_custom.value if buy_preset.value == "직접입력" else buy_preset.value) / 100
-                    sell = float(sell_custom.value if sell_preset.value == "직접입력" else sell_preset.value) / 100
+                    rate = float(
+                        rate_custom.value if rate_preset.value == "직접입력"
+                        else rate_preset.value
+                    ) / 100
+                buy = sell = rate
                 selected_quantity_mode = str(quantity_mode.value)
                 config = SplitTradingConfig(
                     capital, tranche, buy, sell, selected_quantity_mode,
+                    base_slot_count,
                 )
                 symbol = str(symbol_select.value)
                 close = await run.io_bound(load_adjusted_close, symbol, start, end)
@@ -602,70 +586,57 @@ def split_trading_page() -> None:
                 if selected_test_mode == "single":
                     result = await run.io_bound(run_split_backtest, close, config)
                 elif selected_test_mode == "ratio":
-                    buy_rates = [value / 100 for value in _sweep_values(
-                        float(buy_min.value or 0), float(buy_max.value or 0),
-                        float(buy_step.value or 0),
-                    )]
-                    sell_rates = [value / 100 for value in _sweep_values(
-                        float(sell_min.value or 0), float(sell_max.value or 0),
-                        float(sell_step.value or 0),
-                    )]
-                    if len(buy_rates) * len(sell_rates) > 400:
-                        raise ValueError("비율 조합은 최대 400개까지 계산할 수 있습니다. 간격을 늘려주세요.")
-                    if len(buy_rates) * len(sell_rates) * config.max_slots > 20_000:
-                        raise ValueError(
-                            "비율 조합과 동시 보유 차수가 너무 큽니다. "
-                            "비율 간격을 늘리거나 분할횟수를 줄여주세요."
-                        )
-                    status.set_text(f"{len(buy_rates) * len(sell_rates)}개 비율 조합을 계산하고 있습니다…")
+                    rates = [value / 100 for value in range(5, 51, 5)]
+                    status.set_text(f"{len(rates)}개 매수·매도율을 계산하고 있습니다…")
                     optimization = await run.io_bound(
-                        run_ratio_sweep, close, config, buy_rates, sell_rates,
-                        str(criterion.value),
+                        run_ratio_sweep, close, config, rates, str(criterion.value),
                     )
                     result = optimization["best"]
-                    best = optimization["best_parameters"]
-                    buy, sell = best["매수 하락률"], best["매도 상승률"]
-                    split_input += (
-                        f" · 매수 {float(buy_min.value):g}~{float(buy_max.value):g}%"
-                        f" / 매도 {float(sell_min.value):g}~{float(sell_max.value):g}%"
-                    )
+                    rate = float(optimization["best_parameters"]["매수·매도율"])
+                    buy = sell = rate
+                    split_input += " · ±5~50% 탐색"
                 else:
-                    if split_method.value == "횟수":
-                        count_values = _sweep_values(
-                            float(count_min.value or 0), float(count_max.value or 0),
-                            float(count_step.value or 0),
+                    count_values = _sweep_values(
+                        float(count_min.value or 0), float(count_max.value or 0),
+                        float(count_step.value or 0),
+                    )
+                    counts = sorted({int(value) for value in count_values if int(value) >= 1})
+                    candidates = [
+                        (
+                            f"{count_value}회",
+                            _tranche_from_count(capital, count_value, selected_country),
+                            count_value,
                         )
-                        counts = sorted({int(value) for value in count_values if int(value) >= 1})
-                        candidates = [
-                            (f"{count_value}회", _actual_money(capital / count_value, selected_country))
-                            for count_value in counts
-                        ]
-                    else:
-                        amount_values = _sweep_values(
-                            float(amount_min.value or 0), float(amount_max.value or 0),
-                            float(amount_step.value or 0),
-                        )
-                        candidates = [
-                            (_money(_actual_money(value, selected_country), selected_country),
-                             _actual_money(value, selected_country))
-                            for value in amount_values
-                        ]
+                        for count_value in counts
+                    ]
                     if len(candidates) > 100:
-                        raise ValueError("분할 규모 조합은 최대 100개까지 계산할 수 있습니다. 간격을 늘려주세요.")
+                        raise ValueError("분할횟수는 최대 100개까지 비교할 수 있습니다.")
                     estimated_slots = sum(
-                        int(capital // tranche_value)
-                        for _, tranche_value in candidates if tranche_value > 0
+                        slot_count
+                        for _, tranche_value, slot_count in candidates if tranche_value > 0
                     )
-                    if estimated_slots > 20_000:
+                    rate_multiplier = 10 if selected_test_mode == "combined" else 1
+                    if estimated_slots * rate_multiplier > 20_000:
                         raise ValueError(
-                            "분할 규모 조합의 총 계산량이 너무 큽니다. "
-                            "최소 회당금액이나 간격을 늘려주세요."
+                            "분할횟수 범위의 총 계산량이 너무 큽니다. 범위를 줄여주세요."
                         )
-                    status.set_text(f"{len(candidates)}개 분할 규모를 계산하고 있습니다…")
-                    optimization = await run.io_bound(
-                        run_tranche_sweep, close, config, candidates,
-                        str(criterion.value),
-                    )
+                    if selected_test_mode == "combined":
+                        rates = [value / 100 for value in range(5, 51, 5)]
+                        status.set_text(
+                            f"{len(candidates) * len(rates)}개 횟수·비율 조합을 계산하고 있습니다…"
+                        )
+                        optimization = await run.io_bound(
+                            run_combined_sweep, close, config, candidates, rates,
+                            str(criterion.value),
+                        )
+                        rate = float(optimization["best_parameters"]["매수·매도율"])
+                        buy = sell = rate
+                    else:
+                        status.set_text(f"{len(candidates)}개 분할횟수를 계산하고 있습니다…")
+                        optimization = await run.io_bound(
+                            run_tranche_sweep, close, config, candidates,
+                            str(criterion.value),
+                        )
                     result = optimization["best"]
                     tranche = float(optimization["best_parameters"]["회당 매수금액"])
                 conditions = {
@@ -677,8 +648,9 @@ def split_trading_page() -> None:
                     "요청 기간": f"{start} ~ {end}",
                     "실제 데이터 기간": f"{result['actual_start']} ~ {result['actual_end']}",
                     "최초 투자총액": capital, "분할 방식": split_input,
-                    "회당 매수금액": tranche, "매수 하락률": buy,
-                    "매도 상승률": sell, "가격 기준": "yfinance auto_adjust 수정종가",
+                    "회당 매수금액": tranche, "매수·매도율": rate,
+                    "매수 하락률": buy, "매도 상승률": sell,
+                    "가격 기준": "yfinance auto_adjust 수정종가",
                     "수량 방식": (
                         "1주 단위 정수 매매" if selected_quantity_mode == "whole"
                         else "금액 기준 소수점 매매(6자리)"
@@ -748,10 +720,8 @@ def split_trading_page() -> None:
         end_input.on_value_change(lambda _: date_changed())
         for control in (
             test_mode, criterion,
-            initial_raw, split_method, amount_raw, count_preset, count_custom,
-            buy_preset, buy_custom, sell_preset, sell_custom, quantity_mode,
-            buy_min, buy_max, buy_step, sell_min, sell_max, sell_step,
-            count_min, count_max, count_step, amount_min, amount_max, amount_step,
+            initial_raw, count_custom, rate_preset, rate_custom, quantity_mode,
+            count_min, count_max, count_step,
         ):
             control.on_value_change(lambda _: update_dynamic_controls())
         run_button.on("click", execute)

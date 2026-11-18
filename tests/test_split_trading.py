@@ -5,6 +5,7 @@ import pandas as pd
 
 from features.snowball04_split_trading.engine import SplitTradingConfig, run_split_backtest
 from features.snowball04_split_trading.optimization import (
+    run_combined_sweep,
     run_ratio_sweep,
     run_tranche_sweep,
 )
@@ -31,17 +32,27 @@ class SplitTradingTests(unittest.TestCase):
         optimization = run_ratio_sweep(
             closes([100, 130, 90, 120]),
             SplitTradingConfig(300, 100, .10, .10),
-            [.05, .10], [.05, .10], "return",
+            [.05, .10], "return",
         )
-        self.assertEqual(len(optimization["runs"]), 4)
-        self.assertEqual(optimization["table"]["순위"].tolist(), [1, 2, 3, 4])
+        self.assertEqual(len(optimization["runs"]), 2)
+        self.assertEqual(optimization["table"]["순위"].tolist(), [1, 2])
         self.assertIs(optimization["best"], optimization["runs"][0]["result"])
 
-    def test_tranche_sweep_supports_count_or_amount_candidates(self):
+    def test_combined_sweep_builds_count_by_paired_rate_grid(self):
+        optimization = run_combined_sweep(
+            closes([100, 130, 90, 120]),
+            SplitTradingConfig(300, 300, .10, .10),
+            [("2회", 150, 2), ("3회", 100, 3)], [.05, .10], "return",
+        )
+        self.assertEqual(len(optimization["table"]), 4)
+        self.assertEqual(set(optimization["table"]["매수·매도율"]), {.05, .10})
+        self.assertEqual(set(optimization["table"]["회당 매수금액"]), {100.0, 150.0})
+
+    def test_tranche_sweep_supports_count_candidates(self):
         optimization = run_tranche_sweep(
             closes([100, 80, 120]),
             SplitTradingConfig(300, 300, .10, .10),
-            [("2회", 150), ("3회", 100)], "mdd",
+            [("2회", 150, 2), ("3회", 100, 3)], "mdd",
         )
         self.assertEqual(set(optimization["table"]["분할 조건"]), {"2회", "3회"})
         self.assertIn("MDD", optimization["table"].columns)
@@ -54,6 +65,8 @@ class SplitTradingTests(unittest.TestCase):
         self.assertIn("app.storage.user[FORM_STORAGE_KEY]", source)
         self.assertIn('step = .01 if is_us else 1', source)
         self.assertNotIn("float(raw_value) / 100.0", source)
+        self.assertNotIn("split_method = ui.select", source)
+        self.assertIn('"combined": "통합 최적화', source)
 
     def test_high_watermark_sets_second_boundary(self):
         result = run_split_backtest(
@@ -120,6 +133,13 @@ class SplitTradingTests(unittest.TestCase):
                 closes([100, 90]),
                 SplitTradingConfig(10_000, 1, .10, .10),
             )
+
+    def test_explicit_slot_count_preserves_requested_count(self):
+        result = run_split_backtest(
+            closes([100, 90]),
+            SplitTradingConfig(102, 25, .10, .10, "fractional_6", 4),
+        )
+        self.assertEqual(result["max_slots"], 4)
 
     def test_sheet_export_uses_next_available_number_and_numeric_cells(self):
         class Worksheet:

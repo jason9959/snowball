@@ -59,19 +59,49 @@ def _finish(runs: list[dict], criterion: str) -> dict:
 def run_ratio_sweep(
     closes: pd.Series,
     base: SplitTradingConfig,
-    buy_rates: Iterable[float],
-    sell_rates: Iterable[float],
+    rates: Iterable[float],
     criterion: str,
 ) -> dict:
     runs = []
-    for buy_rate in buy_rates:
-        for sell_rate in sell_rates:
-            config = replace(base, buy_drop=float(buy_rate), sell_rise=float(sell_rate))
-            result = run_split_backtest(closes, config)
+    for rate in rates:
+        config = replace(base, buy_drop=float(rate), sell_rise=float(rate))
+        result = run_split_backtest(closes, config)
+        runs.append({
+            "parameters": {"매수·매도율": float(rate)},
+            "result": result,
+        })
+    return _finish(runs, criterion)
+
+
+def run_combined_sweep(
+    closes: pd.Series,
+    base: SplitTradingConfig,
+    candidates: Iterable[tuple[str, float, int]],
+    rates: Iterable[float],
+    criterion: str,
+) -> dict:
+    runs = []
+    for label, tranche, slot_count in candidates:
+        if tranche <= 0 or tranche > base.initial_capital:
+            continue
+        for rate in rates:
+            config = replace(
+                base, tranche_amount=float(tranche),
+                buy_drop=float(rate), sell_rise=float(rate),
+                slot_count=int(slot_count),
+            )
+            try:
+                result = run_split_backtest(closes, config)
+            except ValueError as error:
+                if "1주 이상" in str(error):
+                    continue
+                raise
             runs.append({
                 "parameters": {
-                    "매수 하락률": float(buy_rate),
-                    "매도 상승률": float(sell_rate),
+                    "분할 조건": str(label),
+                    "회당 매수금액": float(tranche),
+                    "동시 보유 차수": int(config.max_slots),
+                    "매수·매도율": float(rate),
                 },
                 "result": result,
             })
@@ -81,14 +111,16 @@ def run_ratio_sweep(
 def run_tranche_sweep(
     closes: pd.Series,
     base: SplitTradingConfig,
-    candidates: Iterable[tuple[str, float]],
+    candidates: Iterable[tuple[str, float, int]],
     criterion: str,
 ) -> dict:
     runs = []
-    for label, tranche in candidates:
+    for label, tranche, slot_count in candidates:
         if tranche <= 0 or tranche > base.initial_capital:
             continue
-        config = replace(base, tranche_amount=float(tranche))
+        config = replace(
+            base, tranche_amount=float(tranche), slot_count=int(slot_count),
+        )
         try:
             result = run_split_backtest(closes, config)
         except ValueError as error:
