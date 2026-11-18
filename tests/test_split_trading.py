@@ -10,6 +10,12 @@ from features.snowball04_split_trading.optimization import (
     run_ratio_sweep,
     run_tranche_sweep,
 )
+from features.snowball04_split_trading.persistence import (
+    deserialize_optimization,
+    deserialize_result,
+    serialize_optimization,
+    serialize_result,
+)
 from features.snowball04_split_trading.sheets import export_result
 
 
@@ -74,12 +80,37 @@ class SplitTradingTests(unittest.TestCase):
         self.assertIn('"최소 매수·매도율(%)"', source)
         self.assertIn('"최대 매수·매도율(%)"', source)
         self.assertIn("counts = list(range(1, count_value + 1))", source)
+        self.assertIn('LAST_RESULT_STORAGE_KEY', source)
+        self.assertIn('else "whole"', source)
+        self.assertIn('_best_heatmap_condition(', source)
 
     def test_rate_sweep_uses_five_percentage_point_steps_and_includes_maximum(self):
         self.assertEqual(rate_sweep(10, 30), [.10, .15, .20, .25, .30])
         self.assertEqual(rate_sweep(12, 20), [.12, .17, .20])
         with self.assertRaisesRegex(ValueError, "최소 매수·매도율"):
             rate_sweep(30, 10)
+
+    def test_last_result_round_trip_restores_series_trades_and_heatmap_table(self):
+        result = run_split_backtest(
+            closes([100, 90, 110]), SplitTradingConfig(300, 100, .10, .10),
+        )
+        restored = deserialize_result(serialize_result(result))
+        pd.testing.assert_series_equal(
+            restored["split_nav"], result["split_nav"], check_freq=False,
+        )
+        self.assertEqual(len(restored["trades"]), len(result["trades"]))
+        self.assertEqual(restored["quantity_mode"], result["quantity_mode"])
+
+        optimization = run_combined_sweep(
+            closes([100, 90, 110]), SplitTradingConfig(300, 300, .10, .10),
+            [("2회", 150, 2)], [.10, .15], "return",
+        )
+        restored_optimization = deserialize_optimization(
+            serialize_optimization(optimization)
+        )
+        pd.testing.assert_frame_equal(
+            restored_optimization["table"], optimization["table"], check_dtype=False,
+        )
 
     def test_high_watermark_sets_second_boundary(self):
         result = run_split_backtest(

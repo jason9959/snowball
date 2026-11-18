@@ -19,10 +19,18 @@ from .optimization import (
     run_ratio_sweep,
     run_tranche_sweep,
 )
+from .persistence import (
+    deserialize_optimization,
+    deserialize_result,
+    serialize_optimization,
+    serialize_result,
+)
 from .sheets import connect_spreadsheet, export_result
 
 
 FORM_STORAGE_KEY = "split_trading_form_v1"
+LAST_RESULT_STORAGE_KEY = "split_trading_last_result_v1"
+FORM_VERSION = 2
 
 
 def _money(value: float, country: str) -> str:
@@ -236,6 +244,26 @@ def _combined_heatmap(
     }).classes("w-full").style(f"height: {max(460, len(conditions) * 34 + 140)}px")
 
 
+def _best_heatmap_condition(
+    optimization: dict, metric: str, title: str, country: str,
+) -> None:
+    frame = optimization["table"]
+    best = frame.loc[frame[metric].astype(float).idxmax()]
+    value = (
+        f"{float(best[metric]):.2%}"
+        if metric in {"총수익률", "MDD"}
+        else f"{float(best[metric]):.2f}"
+    )
+    with ui.card().classes("metric-card w-full"):
+        ui.label(f"{title} 최고 조건").classes("font-bold text-primary")
+        with ui.row().classes("w-full items-center justify-between gap-3"):
+            ui.label(
+                f"{best['분할 조건']} · 회당 {_money(float(best['회당 매수금액']), country)} "
+                f"· 매수·매도율 {float(best['매수·매도율']):.0%}"
+            ).classes("text-sm")
+            ui.label(value).classes("metric-value")
+
+
 def _allocation_chart(optimization: dict) -> None:
     frame = optimization["table"].sort_values("동시 보유 차수")
     labels = frame["분할 조건"].astype(str).tolist()
@@ -263,13 +291,22 @@ def _render_optimization(
     if mode == "ratio":
         _paired_rate_chart(optimization)
     elif mode == "combined":
+        _best_heatmap_condition(
+            optimization, "총수익률", "총수익률", country,
+        )
         _combined_heatmap(
             optimization, "총수익률",
             "회당 매수금액 × 매수·매도율 · 총수익률", country,
         )
+        _best_heatmap_condition(
+            optimization, "MDD", "MDD", country,
+        )
         _combined_heatmap(
             optimization, "MDD",
             "회당 매수금액 × 매수·매도율 · MDD", country,
+        )
+        _best_heatmap_condition(
+            optimization, "수익률/MDD", "수익률/MDD", country,
         )
         _combined_heatmap(
             optimization, "수익률/MDD",
@@ -306,6 +343,7 @@ def split_trading_page() -> None:
     default_start = (pd.Timestamp(today) - pd.DateOffset(years=3)).date()
     stored_value = app.storage.user.get(FORM_STORAGE_KEY, {})
     saved = stored_value if isinstance(stored_value, dict) else {}
+    saved_form_version = int(saved.get("form_version", 1))
     saved_country = str(saved.get("country", "한국"))
     if saved_country not in {"한국", "미국"}:
         saved_country = "한국"
@@ -396,7 +434,11 @@ def split_trading_page() -> None:
                     "whole": "1주 단위 정수 매매",
                     "fractional_6": "금액 기준 소수점 매매(6자리)",
                 },
-                value=str(saved.get("quantity_mode", "fractional_6")), label="수량 방식",
+                value=(
+                    str(saved.get("quantity_mode", "whole"))
+                    if saved_form_version >= FORM_VERSION else "whole"
+                ),
+                label="수량 방식",
             ).props("outlined").classes("w-full")
             currency_help = ui.label("").classes("text-xs text-grey-6")
             run_button = ui.button("백테스트 실행", icon="play_arrow").classes("primary-action w-full")
@@ -410,6 +452,7 @@ def split_trading_page() -> None:
             selected_symbol = str(symbol_select.value or "")
             options = symbol_select.options if isinstance(symbol_select.options, dict) else {}
             app.storage.user[FORM_STORAGE_KEY] = {
+                "form_version": FORM_VERSION,
                 "test_mode": str(test_mode.value),
                 "country": str(country.value),
                 "symbol_query": str(symbol_query.value or ""),
@@ -512,6 +555,55 @@ def split_trading_page() -> None:
             symbol_select.update()
             update_dynamic_controls()
             persist_form()
+
+        def show_output(
+            result: dict | None,
+            optimization: dict | None,
+            selected_country: str,
+            label: str,
+            selected_test_mode: str,
+            conditions: dict,
+            actual_start: object,
+            actual_end: object,
+        ) -> None:
+            result_area.clear()
+            status.set_text(f"{actual_start} ~ {actual_end} 수정종가 기준")
+            with result_area:
+                if optimization is None and result is not None:
+                    _render_result(result, selected_country, label)
+                elif optimization is not None:
+                    _render_optimization(
+                        optimization, selected_country, label, selected_test_mode,
+                    )
+                if optimization is None and result is not None:
+                    export_status = ui.label(
+                        "현재 결과를 연결된 Google Sheets의 새 탭으로 저장할 수 있습니다."
+                    ).classes("status-text")
+                    export_button = ui.button(
+                        "Google Sheets로 내보내기", icon="table_view",
+                    ).classes("primary-action")
+
+                    async def export_sheet() -> None:
+                        export_button.disable()
+                        export_status.set_text("새 Google Sheets 탭을 만드는 중입니다…")
+                        try:
+                            spreadsheet = await run.io_bound(connect_spreadsheet)
+                            title, url = await run.io_bound(
+                                export_result, spreadsheet,
+                                symbol_name=label.split(" · ", 1)[-1],
+                                conditions=conditions, result=result,
+                            )
+                        except Exception as error:
+                            export_status.set_text(f"내보내기 실패: {error}")
+                        else:
+                            export_status.set_text(f"'{title}' 탭에 저장했습니다.")
+                            ui.link("새 탭 열기", url, new_tab=True).classes(
+                                "text-primary font-bold"
+                            )
+                        finally:
+                            export_button.enable()
+
+                    export_button.on("click", export_sheet)
 
         async def execute() -> None:
             persist_form()
@@ -643,37 +735,23 @@ def split_trading_page() -> None:
                     with ui.card().classes("error-card w-full"):
                         ui.label(str(error)).classes("text-negative")
             else:
-                status.set_text(f"{result['actual_start']} ~ {result['actual_end']} 수정종가 기준")
-                with result_area:
-                    if optimization is None:
-                        _render_result(result, selected_country, label)
-                    else:
-                        _render_optimization(
-                            optimization, selected_country, label, selected_test_mode,
-                        )
-                    if optimization is None:
-                        export_status = ui.label("현재 결과를 연결된 Google Sheets의 새 탭으로 저장할 수 있습니다.").classes("status-text")
-                        export_button = ui.button("Google Sheets로 내보내기", icon="table_view").classes("primary-action")
-
-                        async def export_sheet() -> None:
-                            export_button.disable()
-                            export_status.set_text("새 Google Sheets 탭을 만드는 중입니다…")
-                            try:
-                                spreadsheet = await run.io_bound(connect_spreadsheet)
-                                title, url = await run.io_bound(
-                                    export_result, spreadsheet,
-                                    symbol_name=label.split(" · ", 1)[-1],
-                                    conditions=conditions, result=result,
-                                )
-                            except Exception as error:
-                                export_status.set_text(f"내보내기 실패: {error}")
-                            else:
-                                export_status.set_text(f"'{title}' 탭에 저장했습니다.")
-                                ui.link("새 탭 열기", url, new_tab=True).classes("text-primary font-bold")
-                            finally:
-                                export_button.enable()
-
-                        export_button.on("click", export_sheet)
+                app.storage.user[LAST_RESULT_STORAGE_KEY] = {
+                    "version": 1,
+                    "saved_at": datetime.now(ZoneInfo("Asia/Seoul")).isoformat(),
+                    "country": selected_country,
+                    "label": label,
+                    "test_mode": selected_test_mode,
+                    "conditions": conditions,
+                    "actual_start": str(result["actual_start"]),
+                    "actual_end": str(result["actual_end"]),
+                    "result": serialize_result(result) if optimization is None else None,
+                    "optimization": serialize_optimization(optimization),
+                }
+                show_output(
+                    result, optimization, selected_country, label,
+                    selected_test_mode, conditions,
+                    result["actual_start"], result["actual_end"],
+                )
             finally:
                 run_button.enable()
 
@@ -704,4 +782,30 @@ def split_trading_page() -> None:
         run_button.on("click", execute)
         state["restoring"] = False
         update_dynamic_controls()
+        saved_output = app.storage.user.get(LAST_RESULT_STORAGE_KEY)
+        if isinstance(saved_output, dict) and saved_output.get("version") == 1:
+            try:
+                restored_result = (
+                    deserialize_result(saved_output["result"])
+                    if saved_output.get("result") is not None else None
+                )
+                restored_optimization = deserialize_optimization(
+                    saved_output.get("optimization")
+                )
+                show_output(
+                    restored_result,
+                    restored_optimization,
+                    str(saved_output["country"]),
+                    str(saved_output["label"]),
+                    str(saved_output["test_mode"]),
+                    dict(saved_output.get("conditions", {})),
+                    saved_output["actual_start"],
+                    saved_output["actual_end"],
+                )
+                status.set_text(
+                    f"{saved_output['actual_start']} ~ {saved_output['actual_end']} "
+                    "수정종가 기준 · 마지막 계산 결과 복원"
+                )
+            except Exception:
+                app.storage.user.pop(LAST_RESULT_STORAGE_KEY, None)
 
