@@ -49,6 +49,8 @@ class ModularLayoutTests(unittest.TestCase):
         common = ROOT / "common" / "snowball"
         for name in ("layout.py", "styles.py", "backtest_results.py", "preset_store.py"):
             self.assertTrue((common / name).is_file())
+        layout = (common / "layout.py").read_text(encoding="utf-8")
+        self.assertIn("ui.header(fixed=False)", layout)
 
     def test_all_functions_sources_and_native_route_are_local(self):
         for number in range(1, 16):

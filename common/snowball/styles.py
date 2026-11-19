@@ -5,7 +5,7 @@ APP_CSS = r"""
     body { background: var(--snow-bg); color: var(--snow-text); }
     .app-header { background: rgba(255,255,255,.96); color: var(--snow-text);
       border-bottom: 1px solid #e7eaf0; backdrop-filter: blur(10px); }
-    .page-container { max-width: 1040px; margin: 0 auto; padding: 92px 20px 36px; }
+    .page-container { max-width: 1040px; margin: 0 auto; padding: 24px 20px 36px; }
     .page-title { font-size: clamp(1.55rem, 4vw, 2.25rem); font-weight: 800; line-height: 1.2; }
     .page-subtitle { color: #687080; font-size: .95rem; }
     .page-back-button { align-self: flex-start; color: #4f5b70; margin-left: -10px; }
@@ -81,11 +81,13 @@ APP_CSS = r"""
     .result-metric-grid { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)) !important; }
     .monthly-heatmap { height: 510px; }
     .monthly-distribution { height: 340px; }
+    .split-heatmap-scroll { overscroll-behavior-x: contain;
+      -webkit-overflow-scrolling: touch; padding-bottom: 6px; }
     .rebalance-summary { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
     @media (max-width: 700px) {
       .feature-grid { grid-template-columns: 1fr !important; }
       .functions-grid { grid-template-columns: 1fr !important; }
-      .page-container { padding: 82px 14px 28px; }
+      .page-container { padding: 18px 14px 28px; }
       .feature-card { min-height: 0; padding: 15px; }
       .function-card { min-height: 0; padding: 13px 14px; }
       .feature-row-action, .function-action { min-width: 44px; width: 44px; font-size: 0; padding: 0; }

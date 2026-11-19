@@ -32,7 +32,7 @@ FUNCTION_TOOLS = (
 
 
 def shell(active: str = "") -> None:
-    with ui.header().classes("app-header items-center justify-between px-4"):
+    with ui.header(fixed=False).classes("app-header items-center justify-between px-4"):
         with ui.row().classes("items-center gap-3 cursor-pointer").on(
             "click", lambda: ui.navigate.to("/")
         ):

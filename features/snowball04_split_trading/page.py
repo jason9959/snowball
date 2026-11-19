@@ -305,19 +305,19 @@ def _combined_heatmap(
         f"{len(conditions)}개 분할횟수 × {len(rates)}개 매수·매도율 "
         f"= 총 {expected_cells}개 조건"
     ).classes("text-sm text-grey-6")
-    minimum_width = max(720, len(rates) * 76 + 210)
-    with ui.element("div").classes("w-full overflow-x-auto"):
+    minimum_width = max(900, len(rates) * 88 + 300)
+    with ui.element("div").classes("split-heatmap-scroll w-full overflow-x-auto"):
         ui.echart({
             "tooltip": {"position": "top"},
-            "grid": {"left": 130, "right": 20, "top": 20, "bottom": 45},
+            "grid": {"left": 175, "right": 24, "top": 20, "bottom": 48},
             "xAxis": {
                 "type": "category", "name": "매수·매도율",
                 "data": [f"{v:.0%}" for v in rates],
             },
             "yAxis": {
-                "type": "category", "name": "회당 매수금액",
+                "type": "category",
                 "data": [amount_labels[value] for value in conditions],
-                "axisLabel": {"fontSize": 10, "lineHeight": 13},
+                "axisLabel": {"fontSize": 12, "lineHeight": 15, "margin": 12},
             },
             "visualMap": {
                 "show": False, "min": visual_min, "max": visual_max,
@@ -325,7 +325,7 @@ def _combined_heatmap(
             },
             "series": [{
                 "type": "heatmap", "data": data,
-                "label": {"show": True, "fontSize": 10},
+                "label": {"show": True, "fontSize": 13, "fontWeight": 600},
             }],
         }).style(
             f"min-width:{minimum_width}px;"
@@ -377,6 +377,11 @@ def _best_heatmap_condition(
     )
     with ui.card().classes("metric-card w-full"):
         ui.label(f"{title} 최고 조건").classes("font-bold text-primary")
+        if metric == "안정구간 점수":
+            ui.label(
+                "총수익률 40%·MDD 30%·수익률/MDD 30%를 반영하고, "
+                "분할횟수 ±1회·매수매도율 ±5%p 주변 조건의 평균 점수로 선정합니다."
+            ).classes("text-xs text-grey-6 leading-relaxed")
         with ui.row().classes("w-full items-center justify-between gap-3"):
             ui.label(
                 f"{best['분할 조건']} · 회당 {_money(float(best['회당 매수금액']), country)} "
