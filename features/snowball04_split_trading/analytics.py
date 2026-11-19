@@ -35,6 +35,8 @@ def operational_metrics(result: dict) -> dict[str, float | int]:
     position_count = result.get("position_count", pd.Series(1, index=nav.index))
     return {
         "거래 횟수": int(len(trades)),
+        "매수 횟수": int(len(buys)),
+        "매도 횟수": int(len(sells)),
         "완료 매도 횟수": int(len(sells)),
         "수익 거래 비율": float((sells["실현손익"] > 0).mean()) if len(sells) else 0.0,
         "평균 보유기간": float(np.mean(holding_days)) if holding_days else 0.0,
@@ -43,6 +45,10 @@ def operational_metrics(result: dict) -> dict[str, float | int]:
         "최대 현금비중": float(cash_ratio.max()),
         "최대 동시 보유 차수": int(position_count.max()),
         "미청산 보유 차수": int(result.get("open_positions", 0)),
+        "남은 매수 가능 횟수": int(result.get("remaining_buy_slots", 0)),
+        "현재 보유분 매입원금": float(result.get("open_cost_basis", 0.0)),
+        "현재 보유분 평가금": float(result.get("final_holdings_value", 0.0)),
+        "현금자산": float(result.get("final_cash", 0.0)),
         "총 거래비용": float(result.get("total_trading_cost", 0.0)),
     }
 

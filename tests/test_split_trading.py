@@ -121,13 +121,15 @@ class SplitTradingTests(unittest.TestCase):
         self.assertIn('LAST_RESULT_STORAGE_KEY', source)
         self.assertIn('else "whole"', source)
         self.assertIn('_best_heatmap_condition(', source)
-        self.assertIn('"calculable": False', source)
+        self.assertIn('"show": False, "min": visual_min', source)
+        self.assertIn('overflow-x-auto', source)
         self.assertIn('expected_cells = len(conditions) * len(rates)', source)
         self.assertIn('"상세 결과 펼치기"', source)
         self.assertNotIn('"미리 계산된 상세 결과"', source)
         self.assertIn('"초기자산 100 기준 비교"', source)
         self.assertIn('"매수", "type": "scatter"', source)
         self.assertIn('with ui.column().classes("w-full gap-3")', source)
+        self.assertIn('"남은 매수 가능 횟수"', source)
         self.assertNotIn('test_mode.value = "single"', source)
 
     def test_rate_sweep_uses_five_percentage_point_steps_and_includes_maximum(self):
@@ -199,6 +201,9 @@ class SplitTradingTests(unittest.TestCase):
         )
         self.assertEqual(result["max_slots"], 3)
         self.assertAlmostEqual(result["final_cash"], 100_000, places=2)
+        self.assertEqual(result["open_positions"], 3)
+        self.assertEqual(result["remaining_buy_slots"], 0)
+        self.assertGreater(result["open_cost_basis"], 0)
 
     def test_one_slot_only_buys_first_position(self):
         result = run_split_backtest(

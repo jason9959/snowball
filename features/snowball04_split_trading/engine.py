@@ -241,12 +241,14 @@ def run_split_backtest(closes: pd.Series, config: SplitTradingConfig) -> dict:
     full_nav = (prices * full_quantity + full_cash).rename("전액 투자")
     final_close = float(prices.iloc[-1])
     holdings_value = sum(position.quantity * final_close for position in positions.values())
+    open_cost_basis = sum(position.cost_basis for position in positions.values())
     trade_frame = pd.DataFrame(trades, columns=TRADE_COLUMNS)
     full_return = float(full_nav.iloc[-1] / config.initial_capital - 1.0)
     split_return = float(split_nav.iloc[-1] / config.initial_capital - 1.0)
     full_risk = _drawdown_metrics(full_nav)
     split_risk = _drawdown_metrics(split_nav)
     result = {
+        "initial_capital": float(config.initial_capital),
         "prices": prices,
         "full_nav": full_nav,
         "split_nav": split_nav,
@@ -258,6 +260,7 @@ def run_split_backtest(closes: pd.Series, config: SplitTradingConfig) -> dict:
         "quantity_mode": config.quantity_mode,
         "final_cash": cash,
         "final_holdings_value": holdings_value,
+        "open_cost_basis": open_cost_basis,
         "full_final": float(full_nav.iloc[-1]),
         "split_final": float(split_nav.iloc[-1]),
         "full_return": full_return,
@@ -266,6 +269,7 @@ def run_split_backtest(closes: pd.Series, config: SplitTradingConfig) -> dict:
         "actual_start": prices.index[0].date(),
         "actual_end": prices.index[-1].date(),
         "open_positions": len(positions),
+        "remaining_buy_slots": max(0, slots - len(positions)),
         "total_trading_cost": float(trade_frame["거래비용"].sum()),
     }
     result.update({f"full_{key}": value for key, value in full_risk.items()})

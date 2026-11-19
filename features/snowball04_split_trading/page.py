@@ -69,8 +69,9 @@ def _table_columns(names: list[str]) -> list[dict[str, object]]:
 
 def _render_normalized_chart(result: dict, country: str) -> None:
     """Compare both NAV series as if each started at 100."""
-    full = result["full_nav"] / float(result["full_nav"].iloc[0]) * 100
-    split = result["split_nav"] / float(result["split_nav"].iloc[0]) * 100
+    initial = float(result.get("initial_capital", result["full_nav"].iloc[0]))
+    full = result["full_nav"] / initial * 100
+    split = result["split_nav"] / initial * 100
     dates = [timestamp.strftime("%Y-%m-%d") for timestamp in split.index]
     buy_points, sell_points = [], []
     for row in result["trades"].to_dict("records"):
@@ -104,42 +105,9 @@ def _render_normalized_chart(result: dict, country: str) -> None:
 
 
 def _render_result(result: dict, country: str, symbol_label: str) -> None:
-    currency = "KRW" if country == "한국" else "USD"
-    chart_digits = 0 if country == "한국" else 2
     ui.label(f"{symbol_label} 결과").classes("section-title")
-    dates = [timestamp.strftime("%Y-%m-%d") for timestamp in result["split_nav"].index]
-    buy_points, sell_points = [], []
-    for row in result["trades"].to_dict("records"):
-        day = pd.Timestamp(row["거래일"])
-        if day not in result["split_nav"].index:
-            continue
-        point = {
-            "value": [day.strftime("%Y-%m-%d"), round(float(result["split_nav"].loc[day]), chart_digits)],
-            "name": (
-                f"{row['당일 순번']}번 · {row['차수']}차 · "
-                f"{_number(row['시뮬레이션 체결가'], country)}"
-            ),
-        }
-        (buy_points if row["매수/매도"] == "매수" else sell_points).append(point)
-    ui.echart({
-        "tooltip": {"trigger": "axis"},
-        "legend": {"bottom": 0},
-        "grid": {"left": 72, "right": 24, "top": 24, "bottom": 64},
-        "xAxis": {"type": "category", "data": dates, "axisLabel": {"hideOverlap": True}},
-        "yAxis": {"type": "value", "name": currency, "scale": True},
-        "dataZoom": [{"type": "inside"}],
-        "series": [
-            {"name": "전액 투자", "type": "line", "showSymbol": False,
-             "data": result["full_nav"].round(chart_digits).tolist(), "lineStyle": {"width": 2}},
-            {"name": "분할매매", "type": "line", "showSymbol": False,
-             "data": result["split_nav"].round(chart_digits).tolist(), "lineStyle": {"width": 3}},
-            {"name": "매수", "type": "scatter", "data": buy_points, "symbol": "triangle",
-             "symbolSize": 11, "itemStyle": {"color": "#d95c5c"}},
-            {"name": "매도", "type": "scatter", "data": sell_points, "symbol": "triangle",
-             "symbolRotate": 180, "symbolSize": 11, "itemStyle": {"color": "#3f9b65"}},
-        ],
-    }).classes("dashboard-chart w-full")
     _render_normalized_chart(result, country)
+    operations = operational_metrics(result)
     cards = (
         ("전액 투자 최종 평가액", _money(result["full_final"], country)),
         ("전액 투자 총수익률", f"{result['full_return']:.2%}"),
@@ -148,6 +116,11 @@ def _render_result(result: dict, country: str, symbol_label: str) -> None:
         ("수익률 차이", f"{result['return_difference'] * 100:+.2f}%p"),
         ("최종 현금잔액", _money(result["final_cash"], country)),
         ("최종 보유분 평가액", _money(result["final_holdings_value"], country)),
+        ("현재 보유분 매입원금", _money(result.get("open_cost_basis", 0), country)),
+        ("매수 횟수", f"{operations['매수 횟수']}회"),
+        ("매도 횟수", f"{operations['매도 횟수']}회"),
+        ("현재 보유 차수", f"{operations['미청산 보유 차수']}개"),
+        ("남은 매수 가능 횟수", f"{operations['남은 매수 가능 횟수']}회"),
         ("동시 보유 가능 차수", f"{result['max_slots']}차"),
         ("전액 투자 MDD", f"{result['full_max_drawdown']:.2%}"),
         ("분할매매 MDD", f"{result['split_max_drawdown']:.2%}"),
@@ -172,9 +145,9 @@ def _render_result(result: dict, country: str, symbol_label: str) -> None:
     with ui.expansion("운용 품질·기간 검증·경고", icon="fact_check", value=False).classes(
         "strategy-expansion w-full"
     ):
-        operations = operational_metrics(result)
         operation_cards = (
-            ("완료 매도", f"{operations['완료 매도 횟수']}회"),
+            ("매수 횟수", f"{operations['매수 횟수']}회"),
+            ("매도 횟수", f"{operations['매도 횟수']}회"),
             ("수익 거래 비율", f"{operations['수익 거래 비율']:.1%}"),
             ("평균 보유기간", f"{operations['평균 보유기간']:.1f}일"),
             ("평균 투자집행률", f"{operations['평균 투자집행률']:.1%}"),
@@ -302,7 +275,7 @@ def _combined_heatmap(
     )
     conditions = condition_rows["분할 조건"].tolist()
     amount_labels = {
-        row["분할 조건"]: f"{row['분할 조건']} · {_number(row['회당 매수금액'], country)}"
+        row["분할 조건"]: f"{row['분할 조건']}\n{_money(row['회당 매수금액'], country)}"
         for row in condition_rows.to_dict("records")
     }
     rates = sorted(frame["매수·매도율"].unique())
@@ -331,62 +304,38 @@ def _combined_heatmap(
         f"{len(conditions)}개 분할횟수 × {len(rates)}개 매수·매도율 "
         f"= 총 {expected_cells}개 조건"
     ).classes("text-sm text-grey-6")
-    ui.echart({
-        "tooltip": {"position": "top"},
-        "grid": {"left": 96, "right": 24, "top": 24, "bottom": 70},
-        "xAxis": {"type": "category", "name": "매수·매도율", "data": [f"{v:.0%}" for v in rates]},
-        "yAxis": {
-            "type": "category", "name": "회당 매수금액",
-            "data": [amount_labels[value] for value in conditions],
-        },
-        "visualMap": {
-            "min": visual_min, "max": visual_max, "calculable": False,
-            "orient": "horizontal", "left": "center", "bottom": 0,
-            "inRange": {"color": ["#d95c5c", "#fff7f7", "#f3fbf5", "#3f9b65"]},
-        },
-        "series": [{"type": "heatmap", "data": data, "label": {"show": True}}],
-    }).classes("w-full").style(f"height: {max(460, len(conditions) * 34 + 140)}px")
+    minimum_width = max(720, len(rates) * 76 + 210)
+    with ui.element("div").classes("w-full overflow-x-auto"):
+        ui.echart({
+            "tooltip": {"position": "top"},
+            "grid": {"left": 130, "right": 20, "top": 20, "bottom": 45},
+            "xAxis": {
+                "type": "category", "name": "매수·매도율",
+                "data": [f"{v:.0%}" for v in rates],
+            },
+            "yAxis": {
+                "type": "category", "name": "회당 매수금액",
+                "data": [amount_labels[value] for value in conditions],
+                "axisLabel": {"fontSize": 10, "lineHeight": 13},
+            },
+            "visualMap": {
+                "show": False, "min": visual_min, "max": visual_max,
+                "inRange": {"color": ["#d95c5c", "#fff7f7", "#f3fbf5", "#3f9b65"]},
+            },
+            "series": [{
+                "type": "heatmap", "data": data,
+                "label": {"show": True, "fontSize": 10},
+            }],
+        }).style(
+            f"min-width:{minimum_width}px;"
+            f"height:{max(430, len(conditions) * 40 + 110)}px"
+        )
 
 
 def _render_result_preview(result: dict, country: str) -> None:
     """Render an already-calculated winner without its long trade table."""
-    dates = [timestamp.strftime("%Y-%m-%d") for timestamp in result["split_nav"].index]
-    digits = 0 if country == "한국" else 2
-    buy_points, sell_points = [], []
-    for row in result["trades"].to_dict("records"):
-        day = pd.Timestamp(row["거래일"])
-        if day not in result["split_nav"].index:
-            continue
-        point = {
-            "value": [day.strftime("%Y-%m-%d"), round(float(result["split_nav"].loc[day]), digits)],
-            "name": f"{row['매수/매도']} · {row['차수']}차",
-        }
-        (buy_points if row["매수/매도"] == "매수" else sell_points).append(point)
-    ui.echart({
-        "tooltip": {"trigger": "axis"},
-        "legend": {"bottom": 0},
-        "grid": {"left": 70, "right": 20, "top": 20, "bottom": 62},
-        "xAxis": {"type": "category", "data": dates, "axisLabel": {"hideOverlap": True}},
-        "yAxis": {"type": "value", "scale": True},
-        "dataZoom": [{"type": "inside"}],
-        "series": [
-            {
-                "name": "전액 투자", "type": "line", "showSymbol": False,
-                "data": result["full_nav"].round(digits).tolist(),
-            },
-            {
-                "name": "분할매매", "type": "line", "showSymbol": False,
-                "data": result["split_nav"].round(digits).tolist(),
-                "lineStyle": {"width": 3},
-            },
-            {"name": "매수", "type": "scatter", "data": buy_points,
-             "symbol": "triangle", "symbolSize": 10, "itemStyle": {"color": "#d95c5c"}},
-            {"name": "매도", "type": "scatter", "data": sell_points,
-             "symbol": "triangle", "symbolRotate": 180, "symbolSize": 10,
-             "itemStyle": {"color": "#3f9b65"}},
-        ],
-    }).classes("dashboard-chart w-full")
     _render_normalized_chart(result, country)
+    operations = operational_metrics(result)
     metrics = (
         ("최종 평가액", _money(result["split_final"], country)),
         ("총수익률", f"{result['split_return']:.2%}"),
@@ -396,7 +345,13 @@ def _render_result_preview(result: dict, country: str) -> None:
             "수익률/MDD",
             "-" if result["split_return_mdd"] is None else f"{result['split_return_mdd']:.2f}",
         ),
-        ("거래 횟수", f"{len(result['trades']):,}회"),
+        ("매수 횟수", f"{operations['매수 횟수']}회"),
+        ("매도 횟수", f"{operations['매도 횟수']}회"),
+        ("현재 보유 차수", f"{operations['미청산 보유 차수']}개"),
+        ("남은 매수 가능 횟수", f"{operations['남은 매수 가능 횟수']}회"),
+        ("현재 보유분 매입원금", _money(operations["현재 보유분 매입원금"], country)),
+        ("현재 보유분 평가금", _money(operations["현재 보유분 평가금"], country)),
+        ("현금자산", _money(operations["현금자산"], country)),
     )
     with ui.grid().classes("result-metric-grid w-full gap-2"):
         for label, value in metrics:
