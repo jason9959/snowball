@@ -50,7 +50,11 @@ class ModularLayoutTests(unittest.TestCase):
         for name in ("layout.py", "styles.py", "backtest_results.py", "preset_store.py"):
             self.assertTrue((common / name).is_file())
         layout = (common / "layout.py").read_text(encoding="utf-8")
-        self.assertIn("ui.header(fixed=False)", layout)
+        styles = (common / "styles.py").read_text(encoding="utf-8")
+        self.assertIn("ui.header(fixed=False, wrap=False)", layout)
+        self.assertIn('classes("app-brand-title font-bold")', layout)
+        self.assertIn("min-height: 56px", styles)
+        self.assertIn("white-space: nowrap", styles)
 
     def test_all_functions_sources_and_native_route_are_local(self):
         for number in range(1, 16):

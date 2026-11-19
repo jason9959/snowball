@@ -4,7 +4,10 @@ APP_CSS = r"""
     :root { --snow-bg: #f5f7fb; --snow-text: #20242d; }
     body { background: var(--snow-bg); color: var(--snow-text); }
     .app-header { background: rgba(255,255,255,.96); color: var(--snow-text);
-      border-bottom: 1px solid #e7eaf0; backdrop-filter: blur(10px); }
+      border-bottom: 1px solid #e7eaf0; backdrop-filter: blur(10px);
+      min-height: 56px; height: auto; padding: 8px 14px !important; flex-wrap: nowrap !important; }
+    .app-brand-icon { font-size: 1.45rem; line-height: 1; }
+    .app-brand-title { font-size: 1.05rem; line-height: 1.2; white-space: nowrap; }
     .page-container { max-width: 1040px; margin: 0 auto; padding: 24px 20px 36px; }
     .page-title { font-size: clamp(1.55rem, 4vw, 2.25rem); font-weight: 800; line-height: 1.2; }
     .page-subtitle { color: #687080; font-size: .95rem; }
@@ -94,6 +97,9 @@ APP_CSS = r"""
       .feature-icon { font-size: 30px; padding: 8px; }
       .function-icon { font-size: 24px; padding: 7px; }
       .app-header .nav-button { font-size: 0; }
+      .app-header { min-height: 52px; padding: 7px 10px !important; }
+      .app-brand-title { font-size: 1rem; }
+      .app-brand-icon { font-size: 1.3rem; }
       .metric-grid { grid-template-columns: 1fr !important; }
       .metric-card { min-height: 60px; padding: 12px 14px; }
       .metric-label { font-size: .88rem; }

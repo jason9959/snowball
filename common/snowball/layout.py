@@ -32,12 +32,14 @@ FUNCTION_TOOLS = (
 
 
 def shell(active: str = "") -> None:
-    with ui.header(fixed=False).classes("app-header items-center justify-between px-4"):
+    with ui.header(fixed=False, wrap=False).classes(
+        "app-header items-center justify-between"
+    ):
         with ui.row().classes("items-center gap-3 cursor-pointer").on(
             "click", lambda: ui.navigate.to("/")
         ):
-            ui.label("❄️").classes("text-2xl")
-            ui.label(APP_TITLE).classes("text-lg font-bold")
+            ui.label("❄️").classes("app-brand-icon")
+            ui.label(APP_TITLE).classes("app-brand-title font-bold")
         with ui.row().classes("items-center gap-1"):
             ui.button("홈", icon="home", on_click=lambda: ui.navigate.to("/")).props(
                 "flat dense"
