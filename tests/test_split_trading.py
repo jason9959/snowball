@@ -124,7 +124,10 @@ class SplitTradingTests(unittest.TestCase):
         self.assertIn('"calculable": False', source)
         self.assertIn('expected_cells = len(conditions) * len(rates)', source)
         self.assertIn('"상세 결과 펼치기"', source)
-        self.assertIn('"미리 계산된 상세 결과"', source)
+        self.assertNotIn('"미리 계산된 상세 결과"', source)
+        self.assertIn('"초기자산 100 기준 비교"', source)
+        self.assertIn('"매수", "type": "scatter"', source)
+        self.assertIn('with ui.column().classes("w-full gap-3")', source)
         self.assertNotIn('test_mode.value = "single"', source)
 
     def test_rate_sweep_uses_five_percentage_point_steps_and_includes_maximum(self):

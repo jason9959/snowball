@@ -67,6 +67,42 @@ def _table_columns(names: list[str]) -> list[dict[str, object]]:
             for name in names]
 
 
+def _render_normalized_chart(result: dict, country: str) -> None:
+    """Compare both NAV series as if each started at 100."""
+    full = result["full_nav"] / float(result["full_nav"].iloc[0]) * 100
+    split = result["split_nav"] / float(result["split_nav"].iloc[0]) * 100
+    dates = [timestamp.strftime("%Y-%m-%d") for timestamp in split.index]
+    buy_points, sell_points = [], []
+    for row in result["trades"].to_dict("records"):
+        day = pd.Timestamp(row["거래일"])
+        if day not in split.index:
+            continue
+        point = {
+            "value": [day.strftime("%Y-%m-%d"), round(float(split.loc[day]), 3)],
+            "name": f"{row['매수/매도']} · {row['차수']}차 · {_number(row['시뮬레이션 체결가'], country)}",
+        }
+        (buy_points if row["매수/매도"] == "매수" else sell_points).append(point)
+    ui.label("초기자산 100 기준 비교").classes("font-bold")
+    ui.echart({
+        "tooltip": {"trigger": "axis"}, "legend": {"bottom": 0},
+        "grid": {"left": 62, "right": 20, "top": 20, "bottom": 64},
+        "xAxis": {"type": "category", "data": dates, "axisLabel": {"hideOverlap": True}},
+        "yAxis": {"type": "value", "name": "100 기준", "scale": True},
+        "dataZoom": [{"type": "inside"}],
+        "series": [
+            {"name": "전액 투자", "type": "line", "showSymbol": False,
+             "data": full.round(3).tolist()},
+            {"name": "분할매매", "type": "line", "showSymbol": False,
+             "data": split.round(3).tolist(), "lineStyle": {"width": 3}},
+            {"name": "매수", "type": "scatter", "data": buy_points,
+             "symbol": "triangle", "symbolSize": 10, "itemStyle": {"color": "#d95c5c"}},
+            {"name": "매도", "type": "scatter", "data": sell_points,
+             "symbol": "triangle", "symbolRotate": 180, "symbolSize": 10,
+             "itemStyle": {"color": "#3f9b65"}},
+        ],
+    }).classes("dashboard-chart w-full")
+
+
 def _render_result(result: dict, country: str, symbol_label: str) -> None:
     currency = "KRW" if country == "한국" else "USD"
     chart_digits = 0 if country == "한국" else 2
@@ -103,6 +139,7 @@ def _render_result(result: dict, country: str, symbol_label: str) -> None:
              "symbolRotate": 180, "symbolSize": 11, "itemStyle": {"color": "#3f9b65"}},
         ],
     }).classes("dashboard-chart w-full")
+    _render_normalized_chart(result, country)
     cards = (
         ("전액 투자 최종 평가액", _money(result["full_final"], country)),
         ("전액 투자 총수익률", f"{result['full_return']:.2%}"),
@@ -315,6 +352,16 @@ def _render_result_preview(result: dict, country: str) -> None:
     """Render an already-calculated winner without its long trade table."""
     dates = [timestamp.strftime("%Y-%m-%d") for timestamp in result["split_nav"].index]
     digits = 0 if country == "한국" else 2
+    buy_points, sell_points = [], []
+    for row in result["trades"].to_dict("records"):
+        day = pd.Timestamp(row["거래일"])
+        if day not in result["split_nav"].index:
+            continue
+        point = {
+            "value": [day.strftime("%Y-%m-%d"), round(float(result["split_nav"].loc[day]), digits)],
+            "name": f"{row['매수/매도']} · {row['차수']}차",
+        }
+        (buy_points if row["매수/매도"] == "매수" else sell_points).append(point)
     ui.echart({
         "tooltip": {"trigger": "axis"},
         "legend": {"bottom": 0},
@@ -332,8 +379,14 @@ def _render_result_preview(result: dict, country: str) -> None:
                 "data": result["split_nav"].round(digits).tolist(),
                 "lineStyle": {"width": 3},
             },
+            {"name": "매수", "type": "scatter", "data": buy_points,
+             "symbol": "triangle", "symbolSize": 10, "itemStyle": {"color": "#d95c5c"}},
+            {"name": "매도", "type": "scatter", "data": sell_points,
+             "symbol": "triangle", "symbolRotate": 180, "symbolSize": 10,
+             "itemStyle": {"color": "#3f9b65"}},
         ],
     }).classes("dashboard-chart w-full")
+    _render_normalized_chart(result, country)
     metrics = (
         ("최종 평가액", _money(result["split_final"], country)),
         ("총수익률", f"{result['split_return']:.2%}"),
@@ -380,13 +433,20 @@ def _best_heatmap_condition(
                 toggle = ui.button(
                     "상세 결과 펼치기", icon="expand_more",
                 ).props("outline no-caps").classes("w-full")
-                with ui.expansion(
-                    "미리 계산된 상세 결과", icon="analytics", value=False,
-                ).classes("strategy-expansion w-full") as detail:
-                    _render_result_preview(preview_result, country)
-                toggle.on(
-                    "click", lambda: detail.set_value(not bool(detail.value)),
-                )
+                detail = ui.column().classes("strategy-expansion w-full gap-3")
+                detail.set_visibility(False)
+                loaded = {"value": False}
+
+                def toggle_detail() -> None:
+                    opening = not bool(detail.visible)
+                    detail.set_visibility(opening)
+                    toggle.set_text("상세 결과 접기" if opening else "상세 결과 펼치기")
+                    if opening and not loaded["value"]:
+                        with detail:
+                            _render_result_preview(preview_result, country)
+                        loaded["value"] = True
+
+                toggle.on("click", toggle_detail)
                 if on_save is not None:
                     ui.button(
                         "조건 비교함에 저장", icon="bookmark_add",
@@ -580,27 +640,27 @@ def split_trading_page() -> None:
                 ui.label("모든 값은 체결금액 대비 비율이며 기본값 0%입니다.").classes(
                     "text-xs text-grey-6"
                 )
-                with ui.row().classes("backtest-field-grid w-full"):
+                with ui.column().classes("w-full gap-3"):
                     buy_fee = ui.number(
                         "매수수수료(%)", value=float(saved.get("buy_fee", 0)),
                         min=0, max=99, step=.01,
-                    ).props("outlined").classes("control-grow")
+                    ).props("outlined").classes("w-full")
                     sell_fee = ui.number(
                         "매도수수료(%)", value=float(saved.get("sell_fee", 0)),
                         min=0, max=99, step=.01,
-                    ).props("outlined").classes("control-grow")
+                    ).props("outlined").classes("w-full")
                     sell_tax = ui.number(
                         "매도세금(%)", value=float(saved.get("sell_tax", 0)),
                         min=0, max=99, step=.01,
-                    ).props("outlined").classes("control-grow")
+                    ).props("outlined").classes("w-full")
                     slippage = ui.number(
                         "슬리피지(%)", value=float(saved.get("slippage", 0)),
                         min=0, max=99, step=.01,
-                    ).props("outlined").classes("control-grow")
+                    ).props("outlined").classes("w-full")
                     fx_cost = ui.number(
                         "환전비용(%)", value=float(saved.get("fx_cost", 0)),
                         min=0, max=99, step=.01,
-                    ).props("outlined").classes("control-grow")
+                    ).props("outlined").classes("w-full")
             currency_help = ui.label("").classes("text-xs text-grey-6")
             run_button = ui.button("백테스트 실행", icon="play_arrow").classes("primary-action w-full")
 
