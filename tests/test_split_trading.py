@@ -130,7 +130,17 @@ class SplitTradingTests(unittest.TestCase):
         self.assertIn('"매수", "type": "scatter"', source)
         self.assertIn('with ui.column().classes("w-full gap-3")', source)
         self.assertIn('"남은 매수 가능 횟수"', source)
+        self.assertIn('"분할매매 프리셋"', source)
+        self.assertIn('save_current_preset', source)
+        self.assertIn('restore_presets_from_browser', source)
         self.assertNotIn('test_mode.value = "single"', source)
+
+        preset_source = (
+            Path(__file__).resolve().parents[1]
+            / "features" / "snowball04_split_trading" / "presets.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("localStorage.setItem", preset_source)
+        self.assertIn("localStorage.getItem", preset_source)
 
     def test_rate_sweep_uses_five_percentage_point_steps_and_includes_maximum(self):
         self.assertEqual(rate_sweep(10, 30), [.10, .15, .20, .25, .30])

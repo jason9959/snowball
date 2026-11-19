@@ -32,6 +32,7 @@ from .persistence import (
     serialize_optimization,
     serialize_result,
 )
+from .presets import load_presets, persist_presets, restore_local_presets
 from .sheets import connect_spreadsheet, export_result
 
 
@@ -493,6 +494,7 @@ def split_trading_page() -> None:
     stored_value = app.storage.user.get(FORM_STORAGE_KEY, {})
     saved = stored_value if isinstance(stored_value, dict) else {}
     saved_form_version = int(saved.get("form_version", 1))
+    split_presets = load_presets()
     saved_country = str(saved.get("country", "한국"))
     if saved_country not in {"한국", "미국"}:
         saved_country = "한국"
@@ -616,6 +618,26 @@ def split_trading_page() -> None:
                         "환전비용(%)", value=float(saved.get("fx_cost", 0)),
                         min=0, max=99, step=.01,
                     ).props("outlined").classes("w-full")
+            with ui.expansion("분할매매 프리셋", icon="bookmark").classes(
+                "strategy-expansion w-full"
+            ):
+                preset_select = ui.select(
+                    {title: title for title in sorted(split_presets)},
+                    label="저장된 프리셋",
+                ).props("outlined clearable").classes("w-full")
+                preset_title = ui.input(
+                    "프리셋 제목", placeholder="예: QQQ 10회·15%",
+                ).props("outlined clearable").classes("w-full")
+                with ui.row().classes("w-full gap-2"):
+                    load_preset_button = ui.button(
+                        "불러오기", icon="download",
+                    ).props("outline no-caps")
+                    save_preset_button = ui.button(
+                        "저장", icon="save",
+                    ).props("outline no-caps")
+                    delete_preset_button = ui.button(
+                        "삭제", icon="delete",
+                    ).props("flat color=negative no-caps")
             currency_help = ui.label("").classes("text-xs text-grey-6")
             run_button = ui.button("백테스트 실행", icon="play_arrow").classes("primary-action w-full")
 
@@ -651,6 +673,83 @@ def split_trading_page() -> None:
                 "slippage": float(slippage.value or 0),
                 "fx_cost": float(fx_cost.value or 0),
             }
+
+        def refresh_preset_options(selected: str | None = None) -> None:
+            preset_select.options = {title: title for title in sorted(split_presets)}
+            preset_select.value = selected if selected in split_presets else None
+            preset_select.update()
+
+        def apply_preset(record: dict) -> None:
+            state["restoring"] = True
+            try:
+                test_mode.value = str(record.get("test_mode", "single"))
+                country.value = str(record.get("country", "한국"))
+                symbol_query.value = str(record.get("symbol_query", ""))
+                symbol = str(record.get("symbol", ""))
+                symbol_label = str(record.get("symbol_label", symbol))
+                symbol_select.options = {symbol: symbol_label} if symbol else {}
+                symbol_select.value = symbol or None
+                symbol_select.update()
+                period.value = str(record.get("period", "custom"))
+                start_input.value = str(record.get("start", start_input.value))
+                end_input.value = str(record.get("end", end_input.value))
+                initial_raw.value = float(record.get("initial", initial_raw.value or 0))
+                count_custom.value = int(record.get("count_custom", 10))
+                rate_preset.value = record.get("rate_preset", 10)
+                rate_custom.value = float(record.get("rate_custom", 10))
+                rate_min.value = float(record.get("rate_min", 10))
+                rate_max.value = float(record.get("rate_max", 30))
+                quantity_mode.value = str(record.get("quantity_mode", "whole"))
+                buy_fee.value = float(record.get("buy_fee", 0))
+                sell_fee.value = float(record.get("sell_fee", 0))
+                sell_tax.value = float(record.get("sell_tax", 0))
+                slippage.value = float(record.get("slippage", 0))
+                fx_cost.value = float(record.get("fx_cost", 0))
+            finally:
+                state["restoring"] = False
+            update_dynamic_controls()
+            persist_form()
+
+        def load_selected_preset() -> None:
+            title = str(preset_select.value or "")
+            if not title or title not in split_presets:
+                ui.notify("불러올 프리셋을 선택해 주세요.", type="warning")
+                return
+            apply_preset(split_presets[title])
+            preset_title.value = title
+            ui.notify(f"'{title}' 프리셋을 불러왔습니다.", type="positive")
+
+        async def save_current_preset() -> None:
+            title = str(preset_title.value or "").strip()
+            if not title:
+                ui.notify("프리셋 제목을 입력해 주세요.", type="warning")
+                return
+            persist_form()
+            record = dict(app.storage.user.get(FORM_STORAGE_KEY, {}))
+            record.pop("form_version", None)
+            split_presets[title] = record
+            await persist_presets(split_presets)
+            refresh_preset_options(title)
+            ui.notify(f"'{title}' 프리셋을 저장했습니다.", type="positive")
+
+        async def delete_selected_preset() -> None:
+            title = str(preset_select.value or preset_title.value or "").strip()
+            if not title or title not in split_presets:
+                ui.notify("삭제할 프리셋을 선택해 주세요.", type="warning")
+                return
+            split_presets.pop(title, None)
+            await persist_presets(split_presets)
+            preset_title.value = ""
+            refresh_preset_options()
+            ui.notify(f"'{title}' 프리셋을 삭제했습니다.", type="positive")
+
+        async def restore_presets_from_browser() -> None:
+            try:
+                restored = await restore_local_presets(split_presets)
+            except Exception:
+                return
+            if restored:
+                refresh_preset_options(str(preset_select.value or "") or None)
 
         def update_currency_inputs() -> None:
             is_us = country.value == "미국"
@@ -731,6 +830,8 @@ def split_trading_page() -> None:
             persist_form()
 
         def reset_symbol() -> None:
+            if state["restoring"]:
+                return
             symbol_query.value = ""
             symbol_select.options = {}
             symbol_select.value = None
@@ -1050,10 +1151,17 @@ def split_trading_page() -> None:
             rate_min, rate_max, buy_fee, sell_fee, sell_tax, slippage, fx_cost,
         ):
             control.on_value_change(lambda _: update_dynamic_controls())
+        preset_select.on_value_change(
+            lambda _: preset_title.set_value(str(preset_select.value or ""))
+        )
+        load_preset_button.on("click", load_selected_preset)
+        save_preset_button.on("click", save_current_preset)
+        delete_preset_button.on("click", delete_selected_preset)
         run_button.on("click", execute)
         state["restoring"] = False
         update_dynamic_controls()
         render_comparison_box()
+        ui.timer(.2, restore_presets_from_browser, once=True)
         saved_output = app.storage.user.get(LAST_RESULT_STORAGE_KEY)
         if isinstance(saved_output, dict) and saved_output.get("version") == 1:
             try:
