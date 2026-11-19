@@ -48,7 +48,7 @@ def _score(result: dict, criterion: str) -> float:
 
 def _summary(result: dict) -> dict[str, float | int]:
     operations = operational_metrics(result)
-    return {
+    summary = {
         "최종 평가액": float(result["split_final"]),
         "총수익률": float(result["split_return"]),
         "MDD": float(result["split_max_drawdown"]),
@@ -62,6 +62,15 @@ def _summary(result: dict) -> dict[str, float | int]:
         "평균 현금비중": float(operations["평균 현금비중"]),
         "미청산 보유 차수": int(operations["미청산 보유 차수"]),
     }
+    if result.get("funding_mode") == "required":
+        summary.update({
+            "최소 필요자금": float(result["minimum_required_capital"]),
+            "최대 자금 필요일": result["minimum_required_capital_date"],
+            "안전 여유 10%": float(result["recommended_capital_10"]),
+            "안전 여유 20%": float(result["recommended_capital_20"]),
+            "안전 여유 30%": float(result["recommended_capital_30"]),
+        })
+    return summary
 
 
 def _finish(runs: list[dict], criterion: str) -> dict:
@@ -114,7 +123,9 @@ def run_combined_sweep(
 ) -> dict:
     runs = []
     for label, tranche, slot_count in candidates:
-        if tranche <= 0 or tranche > base.initial_capital:
+        if tranche <= 0 or (
+            base.funding_mode == "limited" and tranche > base.initial_capital
+        ):
             continue
         for rate in rates:
             config = replace(
@@ -148,7 +159,9 @@ def run_tranche_sweep(
 ) -> dict:
     runs = []
     for label, tranche, slot_count in candidates:
-        if tranche <= 0 or tranche > base.initial_capital:
+        if tranche <= 0 or (
+            base.funding_mode == "limited" and tranche > base.initial_capital
+        ):
             continue
         config = replace(
             base, tranche_amount=float(tranche), slot_count=int(slot_count),

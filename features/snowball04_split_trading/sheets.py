@@ -53,6 +53,15 @@ def export_result(
     rows.extend([[str(key), value] for key, value in conditions.items()])
     rows.extend([
         [], ["결과 요약", "값"],
+        ["자금 운용 방식", (
+            "필요자금 역산" if result.get("funding_mode") == "required"
+            else "투자총액 제한"
+        )],
+        ["최소 필요자금", result.get("minimum_required_capital") or ""],
+        ["최대 자금 필요일", result.get("minimum_required_capital_date") or ""],
+        ["안전 여유 10%", result.get("recommended_capital_10") or ""],
+        ["안전 여유 20%", result.get("recommended_capital_20") or ""],
+        ["안전 여유 30%", result.get("recommended_capital_30") or ""],
         ["전액 투자 최종 평가액", result["full_final"]],
         ["전액 투자 총수익률", result["full_return"]],
         ["분할매매 최종 평가액", result["split_final"]],

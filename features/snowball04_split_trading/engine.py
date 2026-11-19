@@ -29,12 +29,19 @@ class SplitTradingConfig:
     sell_tax_rate: float = 0.0
     slippage_rate: float = 0.0
     fx_cost_rate: float = 0.0
+    funding_mode: str = "limited"
 
     def validate(self) -> None:
-        if self.initial_capital <= 0 or self.tranche_amount <= 0:
-            raise ValueError("투자총액과 회당 매수금액은 0보다 커야 합니다.")
-        if self.tranche_amount > self.initial_capital:
+        if self.funding_mode not in {"limited", "required"}:
+            raise ValueError("지원하지 않는 자금 운용 방식입니다.")
+        if self.tranche_amount <= 0:
+            raise ValueError("회당 매수금액은 0보다 커야 합니다.")
+        if self.funding_mode == "limited" and self.initial_capital <= 0:
+            raise ValueError("투자총액은 0보다 커야 합니다.")
+        if self.funding_mode == "limited" and self.tranche_amount > self.initial_capital:
             raise ValueError("회당 매수금액은 최초 투자총액을 초과할 수 없습니다.")
+        if self.funding_mode == "required" and self.slot_count is None:
+            raise ValueError("필요자금 역산 방식에는 분할횟수가 필요합니다.")
         if not 0 < self.buy_drop < 1:
             raise ValueError("매수 하락률은 0% 초과 100% 미만이어야 합니다.")
         if self.sell_rise <= 0:
@@ -114,7 +121,8 @@ def run_split_backtest(closes: pd.Series, config: SplitTradingConfig) -> dict:
     first_date, first_price = prices.index[0], float(prices.iloc[0])
     slots = config.max_slots
     ids = count(1)
-    cash = float(config.initial_capital)
+    reverse_funding = config.funding_mode == "required"
+    cash = 0.0 if reverse_funding else float(config.initial_capital)
     positions: dict[int, _Position] = {}
     trades: list[dict] = []
     daily_sequence: dict[pd.Timestamp, int] = {}
@@ -163,10 +171,6 @@ def run_split_backtest(closes: pd.Series, config: SplitTradingConfig) -> dict:
     cash_values: list[float] = []
     holding_values: list[float] = []
     position_counts: list[int] = []
-    full_quantity = _order_quantity(config.initial_capital, first_unit_cost, config.quantity_mode)
-    full_spend = full_quantity * first_unit_cost
-    full_cash = config.initial_capital - full_spend
-
     for index, (current_date, close) in enumerate(prices.items()):
         close = float(close)
         if index:
@@ -183,7 +187,7 @@ def run_split_backtest(closes: pd.Series, config: SplitTradingConfig) -> dict:
                 for slot, boundary in sorted(boundaries.items(), key=lambda item: item[1], reverse=True):
                     if slot in positions or not close <= boundary <= previous:
                         continue
-                    if cash + 1e-9 < config.tranche_amount:
+                    if not reverse_funding and cash + 1e-9 < config.tranche_amount:
                         continue
                     if confirmed_base is None:
                         confirmed_base = base
@@ -191,6 +195,11 @@ def run_split_backtest(closes: pd.Series, config: SplitTradingConfig) -> dict:
                     unit_cost = execution * (1.0 + buy_cost_rate)
                     quantity = _order_quantity(config.tranche_amount, unit_cost, config.quantity_mode)
                     if quantity <= 0:
+                        if reverse_funding:
+                            raise ValueError(
+                                "기준 1회 매수금액으로 발생한 매수 신호를 "
+                                "1주 이상 체결할 수 없습니다."
+                            )
                         continue
                     gross = quantity * execution
                     trading_cost = gross * buy_cost_rate
@@ -234,21 +243,64 @@ def run_split_backtest(closes: pd.Series, config: SplitTradingConfig) -> dict:
         holding_values.append(holdings)
         position_counts.append(len(positions))
 
+    observed_cash = [(first_date, 0.0)]
+    observed_cash.extend(zip(prices.index, cash_values))
+    observed_cash.extend(
+        (pd.Timestamp(trade["거래일"]), float(trade["체결 후 현금잔액"]))
+        for trade in trades
+    )
+    funding_trough_date, funding_trough_cash = min(
+        observed_cash, key=lambda item: item[1]
+    )
+    minimum_required_capital = (
+        max(0.0, -float(funding_trough_cash)) if reverse_funding else None
+    )
+    effective_capital = (
+        float(minimum_required_capital)
+        if reverse_funding else float(config.initial_capital)
+    )
+    if effective_capital <= 0:
+        raise ValueError("필요 초기자금을 계산하지 못했습니다.")
+    if reverse_funding:
+        cash += effective_capital
+        cash_values = [value + effective_capital for value in cash_values]
+        split_values = [value + effective_capital for value in split_values]
+        for trade in trades:
+            trade["체결 후 현금잔액"] = float(trade["체결 후 현금잔액"]) + effective_capital
+
     split_nav = pd.Series(split_values, index=prices.index, name="분할매매")
     cash_nav = pd.Series(cash_values, index=prices.index, name="현금")
     holdings_nav = pd.Series(holding_values, index=prices.index, name="보유분")
     position_count = pd.Series(position_counts, index=prices.index, name="보유차수")
+    full_quantity = _order_quantity(effective_capital, first_unit_cost, config.quantity_mode)
+    full_spend = full_quantity * first_unit_cost
+    full_cash = effective_capital - full_spend
     full_nav = (prices * full_quantity + full_cash).rename("전액 투자")
     final_close = float(prices.iloc[-1])
     holdings_value = sum(position.quantity * final_close for position in positions.values())
     open_cost_basis = sum(position.cost_basis for position in positions.values())
     trade_frame = pd.DataFrame(trades, columns=TRADE_COLUMNS)
-    full_return = float(full_nav.iloc[-1] / config.initial_capital - 1.0)
-    split_return = float(split_nav.iloc[-1] / config.initial_capital - 1.0)
+    full_return = float(full_nav.iloc[-1] / effective_capital - 1.0)
+    split_return = float(split_nav.iloc[-1] / effective_capital - 1.0)
     full_risk = _drawdown_metrics(full_nav)
     split_risk = _drawdown_metrics(split_nav)
     result = {
-        "initial_capital": float(config.initial_capital),
+        "initial_capital": effective_capital,
+        "funding_mode": config.funding_mode,
+        "tranche_amount": float(config.tranche_amount),
+        "minimum_required_capital": minimum_required_capital,
+        "minimum_required_capital_date": (
+            pd.Timestamp(funding_trough_date).date() if reverse_funding else None
+        ),
+        "recommended_capital_10": (
+            effective_capital * 1.10 if reverse_funding else None
+        ),
+        "recommended_capital_20": (
+            effective_capital * 1.20 if reverse_funding else None
+        ),
+        "recommended_capital_30": (
+            effective_capital * 1.30 if reverse_funding else None
+        ),
         "prices": prices,
         "full_nav": full_nav,
         "split_nav": split_nav,
@@ -265,7 +317,7 @@ def run_split_backtest(closes: pd.Series, config: SplitTradingConfig) -> dict:
         "split_final": float(split_nav.iloc[-1]),
         "full_return": full_return,
         "split_return": split_return,
-        "return_difference": float((split_nav.iloc[-1] - full_nav.iloc[-1]) / config.initial_capital),
+        "return_difference": float((split_nav.iloc[-1] - full_nav.iloc[-1]) / effective_capital),
         "actual_start": prices.index[0].date(),
         "actual_end": prices.index[-1].date(),
         "open_positions": len(positions),

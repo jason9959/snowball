@@ -31,6 +31,60 @@ def closes(values):
 
 
 class SplitTradingTests(unittest.TestCase):
+    def test_required_funding_executes_every_signal_and_reverses_minimum_capital(self):
+        price = closes([100, 90, 80])
+        limited = run_split_backtest(
+            price,
+            SplitTradingConfig(200, 100, .10, .10, "fractional_6", 3),
+        )
+        required = run_split_backtest(
+            price,
+            SplitTradingConfig(
+                0, 100, .10, .10, "fractional_6", 3,
+                funding_mode="required",
+            ),
+        )
+
+        self.assertEqual(len(limited["trades"]), 2)
+        self.assertEqual(len(required["trades"]), 3)
+        self.assertEqual(required["funding_mode"], "required")
+        self.assertAlmostEqual(
+            required["initial_capital"], required["minimum_required_capital"],
+        )
+        self.assertGreater(required["minimum_required_capital"], 299.0)
+        self.assertEqual(
+            str(required["minimum_required_capital_date"]), "2026-01-06"
+        )
+        self.assertGreaterEqual(float(required["cash_nav"].min()), -1e-8)
+        self.assertAlmostEqual(
+            required["recommended_capital_20"],
+            required["minimum_required_capital"] * 1.2,
+        )
+
+    def test_required_funding_is_supported_by_all_optimization_sweeps(self):
+        price = closes([100, 90, 80, 100])
+        base = SplitTradingConfig(
+            0, 100, .10, .10, "fractional_6", 3,
+            funding_mode="required",
+        )
+        ratio = run_ratio_sweep(price, base, [.10, .15], "return")
+        allocation = run_tranche_sweep(
+            price, base, [("2회", 100, 2), ("3회", 100, 3)], "return",
+        )
+        combined = run_combined_sweep(
+            price, base, [("2회", 100, 2), ("3회", 100, 3)],
+            [.10, .15], "return",
+        )
+
+        self.assertEqual(len(ratio["table"]), 2)
+        self.assertEqual(len(allocation["table"]), 2)
+        self.assertEqual(len(combined["table"]), 4)
+        for optimization in (ratio, allocation, combined):
+            self.assertIn("최소 필요자금", optimization["table"])
+            self.assertTrue(
+                (optimization["table"]["최소 필요자금"] > 0).all()
+            )
+
     def test_drawdown_metrics_are_included(self):
         result = run_split_backtest(
             closes([100, 80, 120]),
@@ -134,6 +188,9 @@ class SplitTradingTests(unittest.TestCase):
         self.assertIn('"남은 매수 가능 횟수"', source)
         self.assertIn('총수익률 40%·MDD 30%', source)
         self.assertIn('"분할매매 프리셋"', source)
+        self.assertIn('"required": "필요자금 역산', source)
+        self.assertIn('"기준 1회 매수금액"', source)
+        self.assertIn('selected_funding_mode', source)
         self.assertIn('save_current_preset', source)
         self.assertIn('restore_presets_from_browser', source)
         self.assertNotIn('test_mode.value = "single"', source)
@@ -288,7 +345,11 @@ class SplitTradingTests(unittest.TestCase):
         )
         self.assertEqual(title, "4. 테스트")
         self.assertIn("#gid=99", url)
-        self.assertIsInstance(book.items[-1].rows[5][1], float)
+        summary = dict(
+            row for row in book.items[-1].rows
+            if len(row) == 2 and row[0] == "전액 투자 최종 평가액"
+        )
+        self.assertIsInstance(summary["전액 투자 최종 평가액"], float)
 
 
 if __name__ == "__main__":

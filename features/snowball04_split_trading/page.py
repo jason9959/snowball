@@ -39,7 +39,7 @@ from .sheets import connect_spreadsheet, export_result
 FORM_STORAGE_KEY = "split_trading_form_v1"
 LAST_RESULT_STORAGE_KEY = "split_trading_last_result_v1"
 COMPARISON_STORAGE_KEY = "split_trading_comparison_v1"
-FORM_VERSION = 2
+FORM_VERSION = 3
 
 
 def _money(value: float, country: str) -> str:
@@ -107,9 +107,23 @@ def _render_normalized_chart(result: dict, country: str) -> None:
 
 def _render_result(result: dict, country: str, symbol_label: str) -> None:
     ui.label(f"{symbol_label} 결과").classes("section-title")
+    if result.get("funding_mode") == "required":
+        ui.label(
+            "현금 제한 없이 모든 매수 신호를 체결한 뒤, 현금흐름의 최저점으로 "
+            "최소 필요자금을 역산한 결과입니다."
+        ).classes("page-subtitle")
     _render_normalized_chart(result, country)
     operations = operational_metrics(result)
-    cards = (
+    funding_cards = ()
+    if result.get("funding_mode") == "required":
+        funding_cards = (
+            ("최소 필요자금", _money(result["minimum_required_capital"], country)),
+            ("최대 자금 필요일", str(result["minimum_required_capital_date"])),
+            ("안전 여유 10%", _money(result["recommended_capital_10"], country)),
+            ("안전 여유 20%", _money(result["recommended_capital_20"], country)),
+            ("안전 여유 30%", _money(result["recommended_capital_30"], country)),
+        )
+    cards = funding_cards + (
         ("전액 투자 최종 평가액", _money(result["full_final"], country)),
         ("전액 투자 총수익률", f"{result['full_return']:.2%}"),
         ("분할매매 최종 평가액", _money(result["split_final"], country)),
@@ -203,7 +217,10 @@ def _render_result(result: dict, country: str, symbol_label: str) -> None:
     ).props("flat bordered dense").classes("w-full account-table")
 def _optimization_table(frame: pd.DataFrame, country: str) -> pd.DataFrame:
     display = frame.copy()
-    for column in ("최종 평가액", "최종 현금", "회당 매수금액"):
+    for column in (
+        "최종 평가액", "최종 현금", "회당 매수금액", "최소 필요자금",
+        "안전 여유 10%", "안전 여유 20%", "안전 여유 30%",
+    ):
         if column in display:
             display[column] = display[column].map(lambda value: _number(value, country))
     for column in (
@@ -337,7 +354,14 @@ def _render_result_preview(result: dict, country: str) -> None:
     """Render an already-calculated winner without its long trade table."""
     _render_normalized_chart(result, country)
     operations = operational_metrics(result)
-    metrics = (
+    funding_metrics = ()
+    if result.get("funding_mode") == "required":
+        funding_metrics = (
+            ("최소 필요자금", _money(result["minimum_required_capital"], country)),
+            ("최대 자금 필요일", str(result["minimum_required_capital_date"])),
+            ("안전 여유 20%", _money(result["recommended_capital_20"], country)),
+        )
+    metrics = funding_metrics + (
         ("최종 평가액", _money(result["split_final"], country)),
         ("총수익률", f"{result['split_return']:.2%}"),
         ("MDD", f"{result['split_max_drawdown']:.2%}"),
@@ -511,6 +535,9 @@ def split_trading_page() -> None:
     saved_test_mode = str(saved.get("test_mode", "single"))
     if saved_test_mode not in {"single", "ratio", "allocation", "combined"}:
         saved_test_mode = "single"
+    saved_funding_mode = str(saved.get("funding_mode", "limited"))
+    if saved_funding_mode not in {"limited", "required"}:
+        saved_funding_mode = "limited"
     state: dict[str, object] = {
         "result": None, "conditions": None, "search_version": 0, "date_sync": False,
         "restoring": True,
@@ -556,9 +583,23 @@ def split_trading_page() -> None:
                 end_input = ui.input(
                     "To", value=str(saved.get("end", today.isoformat())),
                 ).props("type=date").classes("date-input")
+            funding_mode = ui.select(
+                {
+                    "limited": "투자총액 제한 (기존 방식)",
+                    "required": "필요자금 역산 (모든 신호 체결)",
+                },
+                value=saved_funding_mode,
+                label="자금 운용 방식",
+            ).props("outlined").classes("w-full")
+            funding_help = ui.label("").classes("text-xs text-grey-6")
             with ui.row().classes("backtest-field-grid w-full"):
                 initial_raw = ui.number(
                     "최초 투자총액", value=float(saved.get("initial", 10_000_000)), min=.01, step=1,
+                ).props("outlined").classes("control-grow")
+                reverse_tranche_raw = ui.number(
+                    "기준 1회 매수금액",
+                    value=float(saved.get("reverse_tranche", 1_000_000)),
+                    min=.01, step=1,
                 ).props("outlined").classes("control-grow")
                 count_custom = ui.number(
                     "분할횟수 (최적화 시 최대횟수)",
@@ -666,6 +707,8 @@ def split_trading_page() -> None:
                 "start": str(start_input.value),
                 "end": str(end_input.value),
                 "initial": float(initial_raw.value or 0),
+                "funding_mode": str(funding_mode.value),
+                "reverse_tranche": float(reverse_tranche_raw.value or 0),
                 "count_custom": int(count_custom.value or 1),
                 "rate_preset": rate_preset.value,
                 "rate_custom": float(rate_custom.value or 0),
@@ -699,6 +742,10 @@ def split_trading_page() -> None:
                 start_input.value = str(record.get("start", start_input.value))
                 end_input.value = str(record.get("end", end_input.value))
                 initial_raw.value = float(record.get("initial", initial_raw.value or 0))
+                funding_mode.value = str(record.get("funding_mode", "limited"))
+                reverse_tranche_raw.value = float(
+                    record.get("reverse_tranche", reverse_tranche_raw.value or 0)
+                )
                 count_custom.value = int(record.get("count_custom", 10))
                 rate_preset.value = record.get("rate_preset", 10)
                 rate_custom.value = float(record.get("rate_custom", 10))
@@ -760,7 +807,7 @@ def split_trading_page() -> None:
             is_us = country.value == "미국"
             step = .01 if is_us else 1
             digits = 2 if is_us else 0
-            for control in (initial_raw,):
+            for control in (initial_raw, reverse_tranche_raw):
                 if control.value is not None:
                     normalized = round(float(control.value), digits)
                     if float(control.value) != normalized:
@@ -775,21 +822,33 @@ def split_trading_page() -> None:
         def update_dynamic_controls() -> None:
             update_currency_inputs()
             mode = str(test_mode.value)
+            reverse_funding = str(funding_mode.value) == "required"
             optimizing_counts = mode in {"allocation", "combined"}
             optimizing_rates = mode in {"ratio", "combined"}
             fixed_ratio = mode in {"single", "allocation"}
             rate_sweep_card.set_visibility(optimizing_rates)
-            tranche_display.set_visibility(not optimizing_counts)
+            initial_raw.set_visibility(not reverse_funding)
+            reverse_tranche_raw.set_visibility(reverse_funding)
+            tranche_display.set_visibility(not optimizing_counts and not reverse_funding)
             rate_preset.set_visibility(fixed_ratio)
             rate_custom.set_visibility(
                 fixed_ratio and rate_preset.value == "직접입력"
             )
-            raw_total = float(initial_raw.value or 0)
             count_value = int(count_custom.value or 1)
-            raw_tranche = _tranche_from_count(
-                raw_total, max(1, count_value), str(country.value),
-            )
-            tranche_display.value = _money(raw_tranche, str(country.value))
+            if reverse_funding:
+                funding_help.set_text(
+                    "초기자금을 제한하지 않고 모든 신호를 체결합니다. "
+                    "기준 1회 매수금액을 바탕으로 필요한 운용총액을 역산합니다."
+                )
+            else:
+                raw_total = float(initial_raw.value or 0)
+                raw_tranche = _tranche_from_count(
+                    raw_total, max(1, count_value), str(country.value),
+                )
+                tranche_display.value = _money(raw_tranche, str(country.value))
+                funding_help.set_text(
+                    "입력한 투자총액 안에서만 매수하며, 현금이 부족한 신호는 실행하지 않습니다."
+                )
             run_button.set_text(
                 "백테스트 실행" if mode == "single" else "조건 비교 실행"
             )
@@ -985,13 +1044,24 @@ def split_trading_page() -> None:
                     raise ValueError("From은 To보다 늦을 수 없습니다.")
                 selected_country = str(country.value)
                 selected_test_mode = str(test_mode.value)
-                capital = _actual_money(float(initial_raw.value or 0), selected_country)
+                selected_funding_mode = str(funding_mode.value)
+                reverse_funding = selected_funding_mode == "required"
+                capital = (
+                    0.0 if reverse_funding
+                    else _actual_money(float(initial_raw.value or 0), selected_country)
+                )
                 count_value = int(count_custom.value or 1)
                 if count_value < 1:
                     raise ValueError("분할횟수는 1 이상의 정수여야 합니다.")
                 if count_value > 100:
                     raise ValueError("분할횟수는 최대 100회까지 비교할 수 있습니다.")
-                tranche = _tranche_from_count(capital, count_value, selected_country)
+                tranche = (
+                    _actual_money(float(reverse_tranche_raw.value or 0), selected_country)
+                    if reverse_funding
+                    else _tranche_from_count(capital, count_value, selected_country)
+                )
+                if tranche <= 0:
+                    raise ValueError("기준 1회 매수금액은 0보다 커야 합니다.")
                 base_slot_count = count_value
                 split_input = f"{count_value}회 · 회당 {_money(tranche, selected_country)}"
                 if selected_test_mode in {"allocation", "combined"}:
@@ -1013,6 +1083,7 @@ def split_trading_page() -> None:
                     float(sell_tax.value or 0) / 100,
                     float(slippage.value or 0) / 100,
                     float(fx_cost.value or 0) / 100,
+                    selected_funding_mode,
                 )
                 symbol = str(symbol_select.value)
                 close = await run.io_bound(load_adjusted_close, symbol, start, end)
@@ -1039,7 +1110,12 @@ def split_trading_page() -> None:
                     candidates = [
                         (
                             f"{count_value}회",
-                            _tranche_from_count(capital, count_value, selected_country),
+                            (
+                                tranche if reverse_funding
+                                else _tranche_from_count(
+                                    capital, count_value, selected_country,
+                                )
+                            ),
                             count_value,
                         )
                         for count_value in counts
@@ -1080,9 +1156,20 @@ def split_trading_page() -> None:
                 conditions = {
                     "국가": selected_country, "종목": label,
                     "테스트 유형": str(test_mode.options.get(selected_test_mode, selected_test_mode)),
+                    "자금 운용 방식": (
+                        "필요자금 역산 · 모든 신호 체결"
+                        if reverse_funding else "투자총액 제한"
+                    ),
                     "요청 기간": f"{start} ~ {end}",
                     "실제 데이터 기간": f"{result['actual_start']} ~ {result['actual_end']}",
-                    "최초 투자총액": capital, "분할 방식": split_input,
+                    "최초 투자총액": (
+                        result["initial_capital"] if reverse_funding else capital
+                    ),
+                    "역산 최소 필요자금": (
+                        result.get("minimum_required_capital")
+                        if reverse_funding else "해당 없음"
+                    ),
+                    "분할 방식": split_input,
                     "매수·매도율 탐색 범위": (
                         f"{float(rate_min.value):g}% ~ {float(rate_max.value):g}% · 5%p 단위"
                         if selected_test_mode in {"ratio", "combined"} else "해당 없음"
@@ -1151,8 +1238,9 @@ def split_trading_page() -> None:
         start_input.on_value_change(lambda _: date_changed())
         end_input.on_value_change(lambda _: date_changed())
         for control in (
-            test_mode,
-            initial_raw, count_custom, rate_preset, rate_custom, quantity_mode,
+            test_mode, funding_mode,
+            initial_raw, reverse_tranche_raw, count_custom,
+            rate_preset, rate_custom, quantity_mode,
             rate_min, rate_max, buy_fee, sell_fee, sell_tax, slippage, fx_cost,
         ):
             control.on_value_change(lambda _: update_dynamic_controls())
