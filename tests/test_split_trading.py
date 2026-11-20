@@ -31,6 +31,21 @@ def closes(values):
 
 
 class SplitTradingTests(unittest.TestCase):
+    def test_running_high_survives_lower_rebound_after_only_slot_one_remains(self):
+        result = run_split_backtest(
+            closes([100, 65, 87.75, 80, 85, 64]),
+            SplitTradingConfig(300, 100, .35, .35, "fractional_6", 3),
+        )
+        trades = result["trades"]
+        slot_two_buys = trades[
+            (trades["매수/매도"] == "매수") & (trades["차수"] == 2)
+        ]
+
+        self.assertEqual(len(slot_two_buys), 2)
+        self.assertAlmostEqual(
+            float(slot_two_buys.iloc[-1]["시뮬레이션 체결가"]), 65.0,
+        )
+
     def test_required_funding_executes_every_signal_and_reverses_minimum_capital(self):
         price = closes([100, 90, 80])
         limited = run_split_backtest(

@@ -233,7 +233,11 @@ def run_split_backtest(closes: pd.Series, config: SplitTradingConfig) -> dict:
                         "매도", slot, execution, position,
                         profit=profit, trading_cost=trading_cost,
                     )
-                if not any(slot > 1 for slot in positions):
+                # Reset the cycle only when this rising interval actually sold
+                # the final extra slot.  When slot 1 was already alone, the
+                # running high maintained above must not be replaced by a
+                # lower rebound close.
+                if sellable and not any(slot > 1 for slot in positions):
                     temporary_base = max(float(confirmed_base or first_price), close)
                     confirmed_base = None
 
