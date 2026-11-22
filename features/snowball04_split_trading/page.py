@@ -36,9 +36,6 @@ from .presets import load_presets, persist_presets, restore_local_presets
 from .sheets import connect_spreadsheet, export_result
 
 
-FORM_STORAGE_KEY = "split_trading_form_v1"
-LAST_RESULT_STORAGE_KEY = "split_trading_last_result_v1"
-COMPARISON_STORAGE_KEY = "split_trading_comparison_v1"
 FORM_VERSION = 3
 
 
@@ -515,15 +512,28 @@ def _render_optimization(
     ).props("outline no-caps")
 
 
-@ui.page("/split-trading")
-def split_trading_page() -> None:
+def render_split_trading_page(
+    *,
+    forced_funding_mode: str,
+    storage_prefix: str,
+    page_title: str,
+    page_subtitle: str,
+) -> None:
+    """Render a funding-mode-specific page on the shared calculation engine."""
+    if forced_funding_mode not in {"limited", "required"}:
+        raise ValueError("지원하지 않는 자금 운용 방식입니다.")
+    form_storage_key = f"{storage_prefix}_form_v1"
+    last_result_storage_key = f"{storage_prefix}_last_result_v1"
+    comparison_storage_key = f"{storage_prefix}_comparison_v1"
+    preset_user_storage_key = f"{storage_prefix}_presets_v1"
+    preset_local_storage_key = f"snowball_{storage_prefix}_presets_v1"
     shell()
     today = datetime.now(ZoneInfo("Asia/Seoul")).date()
     default_start = (pd.Timestamp(today) - pd.DateOffset(years=3)).date()
-    stored_value = app.storage.user.get(FORM_STORAGE_KEY, {})
+    stored_value = app.storage.user.get(form_storage_key, {})
     saved = stored_value if isinstance(stored_value, dict) else {}
     saved_form_version = int(saved.get("form_version", 1))
-    split_presets = load_presets()
+    split_presets = load_presets(preset_user_storage_key)
     saved_country = str(saved.get("country", "한국"))
     if saved_country not in {"한국", "미국"}:
         saved_country = "한국"
@@ -535,9 +545,7 @@ def split_trading_page() -> None:
     saved_test_mode = str(saved.get("test_mode", "single"))
     if saved_test_mode not in {"single", "ratio", "allocation", "combined"}:
         saved_test_mode = "single"
-    saved_funding_mode = str(saved.get("funding_mode", "limited"))
-    if saved_funding_mode not in {"limited", "required"}:
-        saved_funding_mode = "limited"
+    saved_funding_mode = forced_funding_mode
     state: dict[str, object] = {
         "result": None, "conditions": None, "search_version": 0, "date_sync": False,
         "restoring": True,
@@ -547,8 +555,8 @@ def split_trading_page() -> None:
         with ui.row().classes("items-center gap-2"):
             ui.button(icon="arrow_back", on_click=lambda: ui.navigate.to("/")).props("round flat")
             with ui.column().classes("gap-0"):
-                ui.label("분할매매 백테스트").classes("page-title")
-                ui.label("1차는 보유하고 2차 이후 매수·매도를 반복해 전액 투자와 비교합니다.").classes("page-subtitle")
+                ui.label(page_title).classes("page-title")
+                ui.label(page_subtitle).classes("page-subtitle")
 
         with ui.card().classes("backtest-controls w-full"):
             test_mode = ui.select(
@@ -585,12 +593,15 @@ def split_trading_page() -> None:
                 ).props("type=date").classes("date-input")
             funding_mode = ui.select(
                 {
-                    "limited": "투자총액 제한 (기존 방식)",
-                    "required": "필요자금 역산 (모든 신호 체결)",
+                    forced_funding_mode: (
+                        "투자총액 제한"
+                        if forced_funding_mode == "limited"
+                        else "필요자금 역산 · 모든 신호 체결"
+                    ),
                 },
                 value=saved_funding_mode,
                 label="자금 운용 방식",
-            ).props("outlined").classes("w-full")
+            ).props("outlined disable").classes("w-full")
             funding_help = ui.label("").classes("text-xs text-grey-6")
             with ui.row().classes("backtest-field-grid w-full"):
                 initial_raw = ui.number(
@@ -696,7 +707,7 @@ def split_trading_page() -> None:
                 return
             selected_symbol = str(symbol_select.value or "")
             options = symbol_select.options if isinstance(symbol_select.options, dict) else {}
-            app.storage.user[FORM_STORAGE_KEY] = {
+            app.storage.user[form_storage_key] = {
                 "form_version": FORM_VERSION,
                 "test_mode": str(test_mode.value),
                 "country": str(country.value),
@@ -742,7 +753,7 @@ def split_trading_page() -> None:
                 start_input.value = str(record.get("start", start_input.value))
                 end_input.value = str(record.get("end", end_input.value))
                 initial_raw.value = float(record.get("initial", initial_raw.value or 0))
-                funding_mode.value = str(record.get("funding_mode", "limited"))
+                funding_mode.value = forced_funding_mode
                 reverse_tranche_raw.value = float(
                     record.get("reverse_tranche", reverse_tranche_raw.value or 0)
                 )
@@ -777,10 +788,12 @@ def split_trading_page() -> None:
                 ui.notify("프리셋 제목을 입력해 주세요.", type="warning")
                 return
             persist_form()
-            record = dict(app.storage.user.get(FORM_STORAGE_KEY, {}))
+            record = dict(app.storage.user.get(form_storage_key, {}))
             record.pop("form_version", None)
             split_presets[title] = record
-            await persist_presets(split_presets)
+            await persist_presets(
+                split_presets, preset_user_storage_key, preset_local_storage_key,
+            )
             refresh_preset_options(title)
             ui.notify(f"'{title}' 프리셋을 저장했습니다.", type="positive")
 
@@ -790,14 +803,18 @@ def split_trading_page() -> None:
                 ui.notify("삭제할 프리셋을 선택해 주세요.", type="warning")
                 return
             split_presets.pop(title, None)
-            await persist_presets(split_presets)
+            await persist_presets(
+                split_presets, preset_user_storage_key, preset_local_storage_key,
+            )
             preset_title.value = ""
             refresh_preset_options()
             ui.notify(f"'{title}' 프리셋을 삭제했습니다.", type="positive")
 
         async def restore_presets_from_browser() -> None:
             try:
-                restored = await restore_local_presets(split_presets)
+                restored = await restore_local_presets(
+                    split_presets, preset_user_storage_key, preset_local_storage_key,
+                )
             except Exception:
                 return
             if restored:
@@ -905,7 +922,7 @@ def split_trading_page() -> None:
 
         def render_comparison_box() -> None:
             comparison_area.clear()
-            raw_items = app.storage.user.get(COMPARISON_STORAGE_KEY, [])
+            raw_items = app.storage.user.get(comparison_storage_key, [])
             items = raw_items if isinstance(raw_items, list) else []
             if not items:
                 return
@@ -944,10 +961,10 @@ def split_trading_page() -> None:
                     with ui.row().classes("w-full gap-2"):
                         for index, item in enumerate(items):
                             def remove(saved_index: int = index) -> None:
-                                current = list(app.storage.user.get(COMPARISON_STORAGE_KEY, []))
+                                current = list(app.storage.user.get(comparison_storage_key, []))
                                 if 0 <= saved_index < len(current):
                                     current.pop(saved_index)
-                                app.storage.user[COMPARISON_STORAGE_KEY] = current
+                                app.storage.user[comparison_storage_key] = current
                                 render_comparison_box()
                             ui.button(
                                 f"{index + 1}번 삭제", icon="delete", on_click=remove,
@@ -971,10 +988,10 @@ def split_trading_page() -> None:
                 "stability": float(row.get("안정구간 점수", 0)),
                 "result": serialize_result(result),
             }
-            items = list(app.storage.user.get(COMPARISON_STORAGE_KEY, []))
+            items = list(app.storage.user.get(comparison_storage_key, []))
             items = [saved for saved in items if saved.get("key") != item["key"]]
             items.append(item)
-            app.storage.user[COMPARISON_STORAGE_KEY] = items[-8:]
+            app.storage.user[comparison_storage_key] = items[-8:]
             render_comparison_box()
             ui.notify("조건 비교함에 저장했습니다.", type="positive")
 
@@ -1199,7 +1216,7 @@ def split_trading_page() -> None:
                     with ui.card().classes("error-card w-full"):
                         ui.label(str(error)).classes("text-negative")
             else:
-                app.storage.user[LAST_RESULT_STORAGE_KEY] = {
+                app.storage.user[last_result_storage_key] = {
                     "version": 1,
                     "saved_at": datetime.now(ZoneInfo("Asia/Seoul")).isoformat(),
                     "country": selected_country,
@@ -1255,7 +1272,7 @@ def split_trading_page() -> None:
         update_dynamic_controls()
         render_comparison_box()
         ui.timer(.2, restore_presets_from_browser, once=True)
-        saved_output = app.storage.user.get(LAST_RESULT_STORAGE_KEY)
+        saved_output = app.storage.user.get(last_result_storage_key)
         if isinstance(saved_output, dict) and saved_output.get("version") == 1:
             try:
                 restored_result = (
@@ -1280,5 +1297,18 @@ def split_trading_page() -> None:
                     "수정종가 기준 · 마지막 계산 결과 복원"
                 )
             except Exception:
-                app.storage.user.pop(LAST_RESULT_STORAGE_KEY, None)
+                app.storage.user.pop(last_result_storage_key, None)
+
+
+@ui.page("/split-trading")
+def split_trading_page() -> None:
+    render_split_trading_page(
+        forced_funding_mode="limited",
+        storage_prefix="split_trading",
+        page_title="분할매수",
+        page_subtitle=(
+            "정해진 투자총액 안에서 1차는 보유하고, "
+            "2차 이후 매수·매도를 반복해 성과를 비교합니다."
+        ),
+    )
 

@@ -96,9 +96,9 @@ def home_page() -> None:
         ).classes("page-subtitle")
         with ui.grid(columns=1).classes("feature-grid w-full gap-3"):
             feature_card(
-                "query_stats", "Snowball 01 · 개별 백테스트",
+                "query_stats", "Snowball 01 · 개별 포트폴리오",
                 "한 개의 동적자산배분 전략을 편집하고 장기 성과를 검증합니다.",
-                "개별 백테스트", "/backtest",
+                "개별 포트폴리오", "/backtest",
             )
             feature_card(
                 "call_merge", "Snowball 02 · 포트폴리오 혼합",
@@ -111,9 +111,14 @@ def home_page() -> None:
                 "계좌 현황 보기", "/accounts",
             )
             feature_card(
-                "stacked_line_chart", "Snowball 04 · 분할매매 백테스트",
-                "1차 보유분은 유지하고 추가 차수의 반복 매매 성과를 전액 투자와 비교합니다.",
-                "분할매매 백테스트", "/split-trading",
+                "stacked_line_chart", "Snowball 04 · 분할매수",
+                "정해진 투자총액 안에서 추가 차수의 반복 매매 성과를 비교합니다.",
+                "분할매수", "/split-trading",
+            )
+            feature_card(
+                "all_inclusive", "Snowball 05 · 분할 무한매수",
+                "모든 매수 신호를 실행하고 횟수·비율별 최소 필요자금을 역산합니다.",
+                "필요자금 찾기", "/infinite-split-trading",
             )
 
         ui.separator().classes("my-3")

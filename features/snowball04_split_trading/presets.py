@@ -11,8 +11,8 @@ USER_STORAGE_KEY = "split_trading_presets_v1"
 LOCAL_STORAGE_KEY = "snowball_split_trading_presets_v1"
 
 
-def load_presets() -> dict[str, dict]:
-    raw = app.storage.user.get(USER_STORAGE_KEY, {})
+def load_presets(user_storage_key: str = USER_STORAGE_KEY) -> dict[str, dict]:
+    raw = app.storage.user.get(user_storage_key, {})
     if not isinstance(raw, dict):
         return {}
     return {
@@ -22,22 +22,32 @@ def load_presets() -> dict[str, dict]:
     }
 
 
-def save_presets(records: dict[str, dict]) -> None:
-    app.storage.user[USER_STORAGE_KEY] = records
+def save_presets(
+    records: dict[str, dict], user_storage_key: str = USER_STORAGE_KEY,
+) -> None:
+    app.storage.user[user_storage_key] = records
 
 
-async def persist_presets(records: dict[str, dict]) -> None:
-    save_presets(records)
+async def persist_presets(
+    records: dict[str, dict],
+    user_storage_key: str = USER_STORAGE_KEY,
+    local_storage_key: str = LOCAL_STORAGE_KEY,
+) -> None:
+    save_presets(records, user_storage_key)
     payload = json.dumps(records, ensure_ascii=False, separators=(",", ":"))
     await ui.run_javascript(
-        f"localStorage.setItem({json.dumps(LOCAL_STORAGE_KEY)}, "
+        f"localStorage.setItem({json.dumps(local_storage_key)}, "
         f"{json.dumps(payload, ensure_ascii=False)});"
     )
 
 
-async def restore_local_presets(records: dict[str, dict]) -> bool:
+async def restore_local_presets(
+    records: dict[str, dict],
+    user_storage_key: str = USER_STORAGE_KEY,
+    local_storage_key: str = LOCAL_STORAGE_KEY,
+) -> bool:
     raw = await ui.run_javascript(
-        f"localStorage.getItem({json.dumps(LOCAL_STORAGE_KEY)}) || ''"
+        f"localStorage.getItem({json.dumps(local_storage_key)}) || ''"
     )
     if not raw:
         return False
@@ -49,5 +59,5 @@ async def restore_local_presets(records: dict[str, dict]) -> bool:
         for title, values in restored.items()
         if str(title).strip() and isinstance(values, dict)
     })
-    save_presets(records)
+    save_presets(records, user_storage_key)
     return True

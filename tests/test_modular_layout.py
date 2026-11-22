@@ -13,6 +13,7 @@ class ModularLayoutTests(unittest.TestCase):
             "snowball02_portfolio_mix",
             "snowball03_account_dashboard",
             "snowball04_split_trading",
+            "snowball05_infinite_split_trading",
         )
         for name in expected:
             with self.subTest(feature=name):
@@ -42,6 +43,7 @@ class ModularLayoutTests(unittest.TestCase):
             "snowball02_portfolio_mix",
             "snowball03_account_dashboard",
             "snowball04_split_trading",
+            "snowball05_infinite_split_trading",
         ):
             self.assertIn(name, source)
 

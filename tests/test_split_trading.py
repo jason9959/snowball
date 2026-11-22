@@ -176,7 +176,7 @@ class SplitTradingTests(unittest.TestCase):
             Path(__file__).resolve().parents[1]
             / "features" / "snowball04_split_trading" / "page.py"
         ).read_text(encoding="utf-8")
-        self.assertIn("app.storage.user[FORM_STORAGE_KEY]", source)
+        self.assertIn("app.storage.user[form_storage_key]", source)
         self.assertIn('step = .01 if is_us else 1', source)
         self.assertNotIn("float(raw_value) / 100.0", source)
         self.assertNotIn("split_method = ui.select", source)
@@ -187,7 +187,7 @@ class SplitTradingTests(unittest.TestCase):
         self.assertIn('"최소 매수·매도율(%)"', source)
         self.assertIn('"최대 매수·매도율(%)"', source)
         self.assertIn("counts = list(range(1, count_value + 1))", source)
-        self.assertIn('LAST_RESULT_STORAGE_KEY', source)
+        self.assertIn('last_result_storage_key', source)
         self.assertIn('else "whole"', source)
         self.assertIn('_best_heatmap_condition(', source)
         self.assertIn('"show": False, "min": visual_min', source)
@@ -203,7 +203,7 @@ class SplitTradingTests(unittest.TestCase):
         self.assertIn('"남은 매수 가능 횟수"', source)
         self.assertIn('총수익률 40%·MDD 30%', source)
         self.assertIn('"분할매매 프리셋"', source)
-        self.assertIn('"required": "필요자금 역산', source)
+        self.assertIn('forced_funding_mode="limited"', source)
         self.assertIn('"기준 1회 매수금액"', source)
         self.assertIn('selected_funding_mode', source)
         self.assertIn('save_current_preset', source)
@@ -216,6 +216,13 @@ class SplitTradingTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("localStorage.setItem", preset_source)
         self.assertIn("localStorage.getItem", preset_source)
+
+        infinite_page = (
+            Path(__file__).resolve().parents[1]
+            / "features" / "snowball05_infinite_split_trading" / "page.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn('forced_funding_mode="required"', infinite_page)
+        self.assertIn('storage_prefix="infinite_split_trading"', infinite_page)
 
     def test_rate_sweep_uses_five_percentage_point_steps_and_includes_maximum(self):
         self.assertEqual(rate_sweep(10, 30), [.10, .15, .20, .25, .30])
