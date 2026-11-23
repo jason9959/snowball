@@ -46,20 +46,22 @@ def create_period_controls(
         selected = "custom"
     syncing = {"active": False}
 
-    period = ui.select(YEAR_OPTIONS, value=selected, label="기간").props(
-        "outlined options-dense"
-    ).classes("control-grow")
-    date_props = "type=date"
-    if minimum is not None:
-        date_props += f" min={minimum.isoformat()}"
-    if maximum is not None:
-        date_props += f" max={maximum.isoformat()}"
-    start = ui.input(start_label, value=default_start.isoformat()).props(
-        date_props
-    ).classes("date-input")
-    end = ui.input(end_label, value=default_end.isoformat()).props(
-        date_props
-    ).classes("date-input")
+    with ui.column().classes("period-controls w-full gap-2"):
+        period = ui.select(YEAR_OPTIONS, value=selected, label="기간").props(
+            "outlined options-dense"
+        ).classes("period-select w-full")
+        date_props = "type=date"
+        if minimum is not None:
+            date_props += f" min={minimum.isoformat()}"
+        if maximum is not None:
+            date_props += f" max={maximum.isoformat()}"
+        with ui.grid(columns=2).classes("period-date-row w-full"):
+            start = ui.input(start_label, value=default_start.isoformat()).props(
+                date_props
+            ).classes("date-input")
+            end = ui.input(end_label, value=default_end.isoformat()).props(
+                date_props
+            ).classes("date-input")
 
     def sync_from_period() -> None:
         if str(period.value) == "custom":

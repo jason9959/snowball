@@ -1,4 +1,13 @@
 import datetime as dt
+import sys
+import types
+
+try:
+    __import__("nicegui")
+except ModuleNotFoundError:  # lightweight Codex test runtime
+    nicegui = types.ModuleType("nicegui")
+    nicegui.ui = types.SimpleNamespace(select=object, input=object)
+    sys.modules["nicegui"] = nicegui
 
 from common.snowball.period_controls import YEAR_OPTIONS, period_start
 

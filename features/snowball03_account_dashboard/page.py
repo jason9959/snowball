@@ -523,7 +523,7 @@ async def account_dashboard_page(account_tab: str) -> None:
                 ).tooltip("시세 새로고침")
 
         status = ui.label("계좌 내역을 불러오는 중입니다…").classes("status-text")
-        controls = ui.grid(columns=3).classes("period-date-grid w-full items-end")
+        controls = ui.column().classes("w-full gap-3")
         content = ui.column().classes("w-full gap-4")
         state: dict[str, object] = {"records": [], "bounds": None}
 

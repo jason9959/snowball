@@ -68,13 +68,14 @@ APP_CSS = r"""
       gap: 12px;
       align-items: start;
     }
-    .period-date-grid {
+    .period-controls { align-items: stretch; }
+    .period-select { min-height: 56px; }
+    .period-date-row {
       display: grid !important;
-      grid-template-columns: minmax(105px, .7fr) repeat(2, minmax(150px, 1fr)) !important;
+      grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
       gap: 12px;
-      align-items: start;
     }
-    .period-date-grid > * {
+    .period-date-row > * {
       width: 100% !important;
       min-width: 0 !important;
       max-width: none !important;
@@ -143,13 +144,10 @@ APP_CSS = r"""
         grid-template-columns: 1fr !important;
         gap: 10px;
       }
-      .period-date-grid {
-        grid-template-columns: minmax(82px, .65fr) repeat(2, minmax(0, 1fr)) !important;
-        gap: 7px !important;
-      }
-      .period-date-grid .q-field__label { font-size: .74rem; }
-      .period-date-grid .q-field__native,
-      .period-date-grid .q-field__input { font-size: .82rem; padding-left: 0; padding-right: 0; }
+      .period-date-row { gap: 8px !important; }
+      .period-date-row .q-field__label { font-size: .8rem; }
+      .period-date-row .q-field__native,
+      .period-date-row .q-field__input { font-size: .9rem; }
       .ticker-search-grid { grid-template-columns: minmax(90px, .6fr) minmax(0, 1.4fr) auto !important; }
       .ticker-candidate { grid-column: 1 / -1; grid-row: 2; }
       .ticker-add { grid-column: 3; grid-row: 1; min-width: 78px; }
