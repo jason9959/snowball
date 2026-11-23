@@ -38,8 +38,17 @@ class FunctionsAnalyticsTests(unittest.TestCase):
             compared = comparison(["SPY", "IEF"], self.start, self.end)
             periodic_result = periodic("SPY", self.start, self.end, "반기")
         self.assertEqual(list(compared.table["종목"]), ["SPY", "IEF"])
+        self.assertEqual(compared.metrics, {})
         self.assertIn("SPY · 시작값 100", periodic_result.series)
         self.assertFalse(periodic_result.table.empty)
+
+    def test_comparison_rejects_partially_missing_tickers(self):
+        with patch(
+            "common.functions.analytics.prices",
+            return_value=self.frame[["SPY"]].copy(),
+        ):
+            with self.assertRaisesRegex(ValueError, "IEF"):
+                comparison(["SPY", "IEF"], self.start, self.end)
 
     def test_static_portfolio_supports_contributions(self):
         with patch("common.functions.analytics.prices", side_effect=self._prices):

@@ -239,7 +239,7 @@ def backtest_page() -> None:
                 preset_options(), value=next(iter(BUILTIN_PRESET_SPECS)),
                 label="내 프리셋",
             ).props("outlined options-dense").classes("w-full")
-            with ui.row().classes("backtest-field-grid period-date-grid w-full"):
+            with ui.grid(columns=3).classes("period-date-grid w-full"):
                 dates = create_period_controls(
                     default_start=date(2010, 1, 1),
                     default_end=datetime.now(ZoneInfo("Asia/Seoul")).date(),

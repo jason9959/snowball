@@ -69,7 +69,15 @@ APP_CSS = r"""
       align-items: start;
     }
     .period-date-grid {
+      display: grid !important;
       grid-template-columns: minmax(105px, .7fr) repeat(2, minmax(150px, 1fr)) !important;
+      gap: 12px;
+      align-items: start;
+    }
+    .period-date-grid > * {
+      width: 100% !important;
+      min-width: 0 !important;
+      max-width: none !important;
     }
     .ticker-search-grid {
       display: grid !important;

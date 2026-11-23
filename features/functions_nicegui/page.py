@@ -177,7 +177,7 @@ def functions_page(feature_id: str) -> None:
                     "조건 초기화", icon="restart_alt",
                     on_click=lambda: ui.navigate.to(f"/functions/{feature_id}"),
                 ).props("outline")
-            with ui.row().classes("backtest-field-grid period-date-grid w-full"):
+            with ui.grid(columns=3).classes("period-date-grid w-full"):
                 start, end = _common_dates()
             getter: Callable[[], ToolResult]
 

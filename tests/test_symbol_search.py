@@ -35,6 +35,20 @@ class SymbolSearchTests(unittest.TestCase):
         self.assertNotIn("360750.KS", search_symbols("S&P500", "미국"))
         self.assertIn("360750.KS", search_symbols("S&P500", "한국"))
 
+    @patch("common.snowball.symbols.requests.get")
+    def test_company_name_is_not_mistaken_for_direct_ticker(self, get: Mock) -> None:
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {
+            "quotes": [
+                {"symbol": "NVDA", "exchange": "NMS", "quoteType": "EQUITY", "longname": "NVIDIA Corporation"},
+            ]
+        }
+        get.return_value = response
+        result = search_symbols("nvidia", "미국")
+        self.assertEqual(next(iter(result)), "NVDA")
+        self.assertNotIn("NVIDIA", result)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -12,12 +12,13 @@ def search_symbols(query: str, country: str, limit: int = 12) -> dict[str, str]:
     if not text:
         return {}
     options: dict[str, str] = {}
-    if country == "미국" and re.fullmatch(r"[A-Za-z][A-Za-z0-9.-]{0,14}", text):
+    direct_options: dict[str, str] = {}
+    if country == "미국" and re.fullmatch(r"[A-Za-z][A-Za-z0-9.-]{0,4}", text):
         direct = text.upper()
-        options[direct] = f"{direct} · 티커 직접 사용"
+        direct_options[direct] = f"{direct} · 티커 직접 사용"
     elif country == "한국" and re.fullmatch(r"\d{6}", text):
-        options[f"{text}.KS"] = f"{text}.KS · 코스피 코드 직접 사용"
-        options[f"{text}.KQ"] = f"{text}.KQ · 코스닥 코드 직접 사용"
+        direct_options[f"{text}.KS"] = f"{text}.KS · 코스피 코드 직접 사용"
+        direct_options[f"{text}.KQ"] = f"{text}.KQ · 코스닥 코드 직접 사용"
     try:
         response = requests.get(
             "https://query2.finance.yahoo.com/v1/finance/search",
@@ -28,7 +29,7 @@ def search_symbols(query: str, country: str, limit: int = 12) -> dict[str, str]:
         response.raise_for_status()
         quotes = response.json().get("quotes", [])
     except (requests.RequestException, ValueError):
-        return options
+        return direct_options
     for quote in quotes:
         symbol = str(quote.get("symbol", "")).strip()
         exchange = str(quote.get("exchange", "")).upper()
@@ -42,4 +43,8 @@ def search_symbols(query: str, country: str, limit: int = 12) -> dict[str, str]:
         options[symbol] = f"{symbol} · {name}"
         if len(options) >= limit:
             break
+    for symbol, label in direct_options.items():
+        if len(options) >= limit:
+            break
+        options.setdefault(symbol, label)
     return options

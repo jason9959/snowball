@@ -65,7 +65,7 @@ def page() -> None:
             second_select = ui.select(
                 options, value=builtin_titles[1], label="두 번째 프리셋",
             ).props("outlined options-dense").classes("w-full")
-            with ui.row().classes("backtest-field-grid period-date-grid w-full"):
+            with ui.grid(columns=3).classes("period-date-grid w-full"):
                 dates = create_period_controls(
                     default_start=date(2010, 1, 1),
                     default_end=datetime.now(ZoneInfo("Asia/Seoul")).date(),

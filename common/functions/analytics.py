@@ -52,7 +52,16 @@ def prices(tickers: list[str], start: dt.date, end: dt.date, *, field: str = "Ad
 
 
 def comparison(tickers: list[str], start: dt.date, end: dt.date) -> ToolResult:
-    frame = prices(tickers, start, end).dropna(axis=1, how="all").dropna()
+    requested = list(dict.fromkeys(ticker.strip().upper() for ticker in tickers if ticker.strip()))
+    frame = prices(requested, start, end).dropna(axis=1, how="all")
+    available = {str(column).upper() for column in frame.columns}
+    missing = [ticker for ticker in requested if ticker not in available]
+    if missing:
+        raise ValueError(
+            "가격을 조회하지 못한 종목이 있습니다: " + ", ".join(missing)
+            + ". 검색 결과에서 실제 티커를 선택해 주세요."
+        )
+    frame = frame.dropna()
     if len(frame) < 2:
         raise ValueError("모든 종목의 공통 가격 기간이 충분하지 않습니다.")
     normalized = frame.divide(frame.iloc[0]).mul(100)
@@ -70,8 +79,10 @@ def comparison(tickers: list[str], start: dt.date, end: dt.date) -> ToolResult:
             "MDD(%)": drawdown.min() * 100,
         })
     table = pd.DataFrame(rows).round(2)
-    return ToolResult("상대 수익률 비교", {"비교 종목": f"{len(frame.columns)}개"},
-                      {str(c): normalized[c].dropna() for c in normalized}, table)
+    return ToolResult(
+        "상대 수익률 비교", {},
+        {str(column): normalized[column].dropna() for column in normalized}, table,
+    )
 
 
 def periodic(ticker: str, start: dt.date, end: dt.date, frequency: str) -> ToolResult:

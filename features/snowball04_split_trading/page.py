@@ -581,7 +581,7 @@ def render_split_trading_page(
             search_status = ui.label(
                 "저장된 종목을 복원했습니다." if saved_symbol else "종목명이나 코드를 입력하세요."
             ).classes("status-text")
-            with ui.row().classes("backtest-field-grid period-date-grid w-full"):
+            with ui.grid(columns=3).classes("period-date-grid w-full"):
                 dates = create_period_controls(
                     default_start=date.fromisoformat(str(saved.get("start", default_start.isoformat()))),
                     default_end=date.fromisoformat(str(saved.get("end", today.isoformat()))),
