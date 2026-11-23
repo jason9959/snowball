@@ -103,16 +103,48 @@ def _render_normalized_chart(result: dict, country: str) -> None:
     }).classes("dashboard-chart w-full")
 
 
-def _render_result(result: dict, country: str, symbol_label: str) -> None:
-    ui.label(f"{symbol_label} 결과").classes("section-title")
-    if result.get("funding_mode") == "required":
-        ui.label(
-            "현금 제한 없이 모든 매수 신호를 체결한 뒤, 현금흐름의 최저점으로 "
-            "최소 필요자금을 역산한 결과입니다."
-        ).classes("page-subtitle")
-    _render_normalized_chart(result, country)
-    operations = operational_metrics(result)
-    funding_cards = ()
+def _render_drawdown_chart(result: dict) -> None:
+    """Compare full-investment and split-trading drawdowns over time."""
+    full = (result["full_nav"] / result["full_nav"].cummax() - 1.0) * 100
+    split = (result["split_nav"] / result["split_nav"].cummax() - 1.0) * 100
+    dates = [timestamp.strftime("%Y-%m-%d") for timestamp in split.index]
+    ui.label("낙폭(MDD) 비교").classes("font-bold")
+    ui.echart({
+        "tooltip": {"trigger": "axis"},
+        "legend": {"bottom": 0},
+        "grid": {"left": 64, "right": 20, "top": 20, "bottom": 64},
+        "xAxis": {"type": "category", "data": dates, "axisLabel": {"hideOverlap": True}},
+        "yAxis": {"type": "value", "name": "낙폭(%)", "max": 0, "axisLabel": {"formatter": "{value}%"}},
+        "dataZoom": [{"type": "inside"}],
+        "series": [
+            {
+                "name": "전액 투자 낙폭", "type": "line", "showSymbol": False,
+                "data": full.round(2).tolist(), "lineStyle": {"width": 2, "color": "#8f96a6"},
+                "areaStyle": {"opacity": 0.06},
+            },
+            {
+                "name": "분할매매 낙폭", "type": "line", "showSymbol": False,
+                "data": split.round(2).tolist(), "lineStyle": {"width": 3, "color": "#d95c5c"},
+                "areaStyle": {"opacity": 0.13, "color": "#d95c5c"},
+            },
+        ],
+    }).classes("dashboard-chart w-full")
+
+
+def _render_metric_cards(cards: tuple[tuple[str, str], ...]) -> None:
+    if not cards:
+        return
+    with ui.grid().classes("result-metric-grid w-full gap-3"):
+        for label, value in cards:
+            with ui.card().classes("metric-card w-full"):
+                with ui.row().classes("metric-row w-full items-center justify-between no-wrap"):
+                    ui.label(label).classes("metric-label")
+                    ui.label(value).classes("metric-value")
+
+
+def _render_performance_sections(result: dict, country: str) -> None:
+    """Place shared, return, and MDD metrics beside their relevant charts."""
+    funding_cards: tuple[tuple[str, str], ...] = ()
     if result.get("funding_mode") == "required":
         funding_cards = (
             ("최소 필요자금", _money(result["minimum_required_capital"], country)),
@@ -121,7 +153,20 @@ def _render_result(result: dict, country: str, symbol_label: str) -> None:
             ("안전 여유 20%", _money(result["recommended_capital_20"], country)),
             ("안전 여유 30%", _money(result["recommended_capital_30"], country)),
         )
-    cards = funding_cards + (
+    common_cards = funding_cards + (
+        (
+            "전액 투자 수익률/MDD",
+            "-" if result["full_return_mdd"] is None else f"{result['full_return_mdd']:.2f}",
+        ),
+        (
+            "분할매매 수익률/MDD",
+            "-" if result["split_return_mdd"] is None else f"{result['split_return_mdd']:.2f}",
+        ),
+    )
+    _render_metric_cards(common_cards)
+
+    _render_normalized_chart(result, country)
+    return_cards = (
         ("전액 투자 최종 평가액", _money(result["full_final"], country)),
         ("전액 투자 총수익률", f"{result['full_return']:.2%}"),
         ("분할매매 최종 평가액", _money(result["split_final"], country)),
@@ -130,31 +175,38 @@ def _render_result(result: dict, country: str, symbol_label: str) -> None:
         ("최종 현금잔액", _money(result["final_cash"], country)),
         ("최종 보유분 평가액", _money(result["final_holdings_value"], country)),
         ("현재 보유분 매입원금", _money(result.get("open_cost_basis", 0), country)),
-        ("매수 횟수", f"{operations['매수 횟수']}회"),
-        ("매도 횟수", f"{operations['매도 횟수']}회"),
-        ("현재 보유 차수", f"{operations['미청산 보유 차수']}개"),
-        ("남은 매수 가능 횟수", f"{operations['남은 매수 가능 횟수']}회"),
-        ("동시 보유 가능 차수", f"{result['max_slots']}차"),
+    )
+    with ui.expansion("수익률 관련 지표", icon="trending_up", value=False).classes(
+        "strategy-expansion w-full"
+    ):
+        _render_metric_cards(return_cards)
+
+    _render_drawdown_chart(result)
+    recovery = result["split_mdd_recovery_date"] or "회복 전"
+    risk_cards = (
         ("전액 투자 MDD", f"{result['full_max_drawdown']:.2%}"),
         ("분할매매 MDD", f"{result['split_max_drawdown']:.2%}"),
         ("분할매매 현재 낙폭", f"{result['split_current_drawdown']:.2%}"),
-        (
-            "분할매매 수익률/MDD",
-            "-" if result["split_return_mdd"] is None else f"{result['split_return_mdd']:.2f}",
-        ),
+        ("MDD 직전 고점", str(result["split_mdd_peak_date"])),
+        ("MDD 저점", str(result["split_mdd_trough_date"])),
+        ("MDD 회복일", str(recovery)),
+        ("MDD 구간", f"{result['split_mdd_duration_days']}일"),
     )
-    with ui.grid().classes("result-metric-grid w-full gap-3"):
-        for label, value in cards:
-            with ui.card().classes("metric-card w-full"):
-                with ui.row().classes("metric-row w-full items-center justify-between no-wrap"):
-                    ui.label(label).classes("metric-label")
-                    ui.label(value).classes("metric-value")
-    recovery = result["split_mdd_recovery_date"] or "회복 전"
-    ui.label(
-        "분할매매 최대 낙폭 구간 · "
-        f"{result['split_mdd_peak_date']} → {result['split_mdd_trough_date']} · "
-        f"회복 {recovery} · {result['split_mdd_duration_days']}일"
-    ).classes("text-sm text-grey-6")
+    with ui.expansion("MDD 관련 지표", icon="trending_down", value=False).classes(
+        "strategy-expansion w-full"
+    ):
+        _render_metric_cards(risk_cards)
+
+
+def _render_result(result: dict, country: str, symbol_label: str) -> None:
+    ui.label(f"{symbol_label} 결과").classes("section-title")
+    if result.get("funding_mode") == "required":
+        ui.label(
+            "현금 제한 없이 모든 매수 신호를 체결한 뒤, 현금흐름의 최저점으로 "
+            "최소 필요자금을 역산한 결과입니다."
+        ).classes("page-subtitle")
+    _render_performance_sections(result, country)
+    operations = operational_metrics(result)
     with ui.expansion("운용 품질·기간 검증·경고", icon="fact_check", value=False).classes(
         "strategy-expansion w-full"
     ):
@@ -350,24 +402,9 @@ def _combined_heatmap(
 
 def _render_result_preview(result: dict, country: str) -> None:
     """Render an already-calculated winner without its long trade table."""
-    _render_normalized_chart(result, country)
+    _render_performance_sections(result, country)
     operations = operational_metrics(result)
-    funding_metrics = ()
-    if result.get("funding_mode") == "required":
-        funding_metrics = (
-            ("최소 필요자금", _money(result["minimum_required_capital"], country)),
-            ("최대 자금 필요일", str(result["minimum_required_capital_date"])),
-            ("안전 여유 20%", _money(result["recommended_capital_20"], country)),
-        )
-    metrics = funding_metrics + (
-        ("최종 평가액", _money(result["split_final"], country)),
-        ("총수익률", f"{result['split_return']:.2%}"),
-        ("MDD", f"{result['split_max_drawdown']:.2%}"),
-        ("현재 낙폭", f"{result['split_current_drawdown']:.2%}"),
-        (
-            "수익률/MDD",
-            "-" if result["split_return_mdd"] is None else f"{result['split_return_mdd']:.2f}",
-        ),
+    metrics = (
         ("매수 횟수", f"{operations['매수 횟수']}회"),
         ("매도 횟수", f"{operations['매도 횟수']}회"),
         ("현재 보유 차수", f"{operations['미청산 보유 차수']}개"),
@@ -376,12 +413,10 @@ def _render_result_preview(result: dict, country: str) -> None:
         ("현재 보유분 평가금", _money(operations["현재 보유분 평가금"], country)),
         ("현금자산", _money(operations["현금자산"], country)),
     )
-    with ui.grid().classes("result-metric-grid w-full gap-2"):
-        for label, value in metrics:
-            with ui.card().classes("metric-card w-full"):
-                with ui.row().classes("metric-row w-full items-center justify-between no-wrap"):
-                    ui.label(label).classes("metric-label")
-                    ui.label(value).classes("metric-value")
+    with ui.expansion("운용 현황", icon="account_balance_wallet", value=False).classes(
+        "strategy-expansion w-full"
+    ):
+        _render_metric_cards(metrics)
 
 
 def _best_heatmap_condition(
