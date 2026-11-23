@@ -198,6 +198,27 @@ def _render_performance_sections(result: dict, country: str) -> None:
         _render_metric_cards(risk_cards)
 
 
+def _render_asset_summary(result: dict, country: str) -> None:
+    frame = result.get("asset_summary")
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return
+    display = frame.copy()
+    for column in (
+        "배정 기준금액", "회당 매수금액", "실현손익", "미실현손익", "최종 평가액",
+    ):
+        if column in display:
+            display[column] = display[column].map(lambda value: _money(float(value), country))
+    if "매수·매도율" in display:
+        display["매수·매도율"] = display["매수·매도율"].map(
+            lambda value: f"{float(value):.1%}"
+        )
+    ui.label("종목별 운용 결과").classes("section-title")
+    ui.table(
+        columns=_table_columns(list(display.columns)),
+        rows=display.fillna("").to_dict("records"), pagination={"rowsPerPage": 10},
+    ).props("flat bordered dense").classes("w-full account-table")
+
+
 def _render_result(result: dict, country: str, symbol_label: str) -> None:
     ui.label(f"{symbol_label} 결과").classes("section-title")
     if result.get("funding_mode") == "required":
@@ -206,6 +227,7 @@ def _render_result(result: dict, country: str, symbol_label: str) -> None:
             "최소 필요자금을 역산한 결과입니다."
         ).classes("page-subtitle")
     _render_performance_sections(result, country)
+    _render_asset_summary(result, country)
     operations = operational_metrics(result)
     with ui.expansion("운용 품질·기간 검증·경고", icon="fact_check", value=False).classes(
         "strategy-expansion w-full"

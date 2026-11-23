@@ -120,6 +120,16 @@ def home_page() -> None:
                 "모든 매수 신호를 실행하고 횟수·비율별 최소 필요자금을 역산합니다.",
                 "필요자금 찾기", "/infinite-split-trading",
             )
+            feature_card(
+                "dataset", "Snowball 06 · 다종목 분할매수",
+                "여러 종목이 하나의 고정 투자금과 현금 잔고를 공유합니다.",
+                "다종목 분할매수", "/multi-split-trading",
+            )
+            feature_card(
+                "hub", "Snowball 07 · 다종목 분할 무한매수",
+                "여러 종목의 전체 매수 신호에 필요한 최소 운용자금을 역산합니다.",
+                "다종목 필요자금", "/multi-infinite-split-trading",
+            )
 
         ui.separator().classes("my-3")
         ui.label("Functions 투자 도구").classes("page-title section-heading")

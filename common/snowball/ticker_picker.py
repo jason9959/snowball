@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
 from nicegui import run, ui
 
@@ -22,6 +22,7 @@ class TickerPicker:
         weighted: bool = False,
         default_weights: Iterable[float] = (),
         default_country: str = "미국",
+        on_change: Callable[[], None] | None = None,
     ) -> None:
         self.max_items = max(1, int(max_items))
         self.label = label
@@ -36,6 +37,7 @@ class TickerPicker:
         }
         self._labels = {symbol: symbol for symbol in self._symbols}
         self._search_version = 0
+        self._on_change = on_change
 
         with ui.column().classes("ticker-picker w-full gap-2"):
             with ui.row().classes("ticker-search-grid w-full items-end"):
@@ -113,6 +115,8 @@ class TickerPicker:
         self._set_candidates({})
         self.status.set_text(f"{symbol}을 추가했습니다. ({len(self._symbols)}/{self.max_items})")
         self._render_list()
+        if self._on_change is not None:
+            self._on_change()
 
     def _remove(self, symbol: str) -> None:
         if symbol in self._symbols:
@@ -121,6 +125,8 @@ class TickerPicker:
         self._labels.pop(symbol, None)
         self.status.set_text(f"{symbol}을 삭제했습니다. ({len(self._symbols)}/{self.max_items})")
         self._render_list()
+        if self._on_change is not None:
+            self._on_change()
 
     def _render_list(self) -> None:
         self.list_area.clear()
@@ -175,3 +181,8 @@ class TickerPicker:
         }
         self.status.set_text(f"{len(symbols)}개 종목을 불러왔습니다.")
         self._render_list()
+        if self._on_change is not None:
+            self._on_change()
+
+    def set_on_change(self, callback: Callable[[], None] | None) -> None:
+        self._on_change = callback

@@ -13,6 +13,8 @@ from features.snowball02_portfolio_mix import page as _snowball02_page  # noqa: 
 from features.snowball03_account_dashboard import page as _snowball03_page  # noqa: F401
 from features.snowball04_split_trading import page as _snowball04_page  # noqa: F401
 from features.snowball05_infinite_split_trading import page as _snowball05_page  # noqa: F401
+from features.snowball06_multi_split_trading import page as _snowball06_page  # noqa: F401
+from features.snowball07_multi_infinite_split import page as _snowball07_page  # noqa: F401
 from features.functions_nicegui import page as _functions_page  # noqa: F401
 
 
