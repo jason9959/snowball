@@ -39,6 +39,7 @@ from common.functions.specialized import (
 )
 from common.snowball.layout import shell
 from common.snowball.period_controls import create_period_controls, period_start
+from common.snowball.ticker_picker import TickerPicker
 
 
 TOOLS = {
@@ -62,10 +63,6 @@ TOOLS = {
 
 def _date(value: object) -> dt.date:
     return dt.date.fromisoformat(str(value))
-
-
-def _tickers(value: object) -> list[str]:
-    return [item.strip().upper() for item in str(value or "").split(",") if item.strip()]
 
 
 def _numbers(value: object) -> list[float]:
@@ -180,7 +177,7 @@ def functions_page(feature_id: str) -> None:
                     "조건 초기화", icon="restart_alt",
                     on_click=lambda: ui.navigate.to(f"/functions/{feature_id}"),
                 ).props("outline")
-            with ui.row().classes("backtest-field-grid w-full"):
+            with ui.row().classes("backtest-field-grid period-date-grid w-full"):
                 start, end = _common_dates()
             getter: Callable[[], ToolResult]
 
@@ -226,11 +223,15 @@ def functions_page(feature_id: str) -> None:
                     risk_tab = ui.tab("위험 회피 옵션")
                 with ui.tab_panels(dynamic_tabs, value=asset_tab).classes("dashboard-panels w-full"):
                     with ui.tab_panel(asset_tab):
-                        attack_tickers = ui.input(
-                            "투자자산 후보(쉼표 구분)",
-                            value="QQQ, SOXX, XLE, XLK, XLV, EDV, GLD, PDBC",
-                        ).classes("w-full")
-                        defense_tickers = ui.input("방어자산 후보(쉼표 구분)", value="BIL, IEF, HYG").classes("w-full")
+                        ui.label("투자자산 후보").classes("section-title")
+                        attack_tickers = TickerPicker(
+                            defaults=["QQQ", "SOXX", "XLE", "XLK", "XLV", "EDV", "GLD", "PDBC"],
+                            max_items=20, label="투자자산",
+                        )
+                        ui.label("방어자산 후보").classes("section-title")
+                        defense_tickers = TickerPicker(
+                            defaults=["BIL", "IEF", "HYG"], max_items=20, label="방어자산",
+                        )
                     with ui.tab_panel(attack_tab):
                         with ui.row().classes("backtest-field-grid w-full"):
                             attack_mode = ui.select(ATTACK_MODES, value="상대 모멘텀", label="투자자산 선택 방식")
@@ -267,9 +268,11 @@ def functions_page(feature_id: str) -> None:
                             negative_threshold = ui.number("전체 방어 전환 기준 자산 수", value=5, min=1, max=20)
                     with ui.tab_panel(risk_tab):
                         ui.label("옵션 A · 카나리아 ETF").classes("section-title")
+                        canary_tickers = TickerPicker(
+                            defaults=["SPY", "TIP"], max_items=10, label="카나리아 ETF",
+                        )
                         with ui.row().classes("backtest-field-grid w-full"):
                             risk_enabled = ui.checkbox("카나리아 ETF 사용", value=True)
-                            canary_tickers = ui.input("카나리아 ETF(쉼표 구분)", value="SPY, TIP")
                             risk_apply = ui.select(CANARY_APPLY_MODES, value="방어형", label="위험 신호 적용 방식")
                             risk_direction = ui.select(["마이너스(-)", "플러스(+)"], value="마이너스(-)", label="위험 신호 방향")
                             risk_momentum_type = ui.select(["절대 모멘텀", "상대 모멘텀"], value="절대 모멘텀", label="카나리아 기준")
@@ -298,8 +301,8 @@ def functions_page(feature_id: str) -> None:
                     if preset.value == "직접 설정":
                         return
                     values = RESEARCH_PRESETS[str(preset.value)]
-                    attack_tickers.value = ", ".join(values.get("attack_tickers", []))
-                    defense_tickers.value = ", ".join(values.get("defense_tickers", []))
+                    attack_tickers.set_values(values.get("attack_tickers", []))
+                    defense_tickers.set_values(values.get("defense_tickers", []))
                     attack_mode.value = values.get("attack_mode", "상대 모멘텀")
                     attack_count.value = values.get("attack_select_count", 1)
                     attack_momentum = values.get("attack_relative", {})
@@ -330,7 +333,7 @@ def functions_page(feature_id: str) -> None:
                     fixed_defense.value = float(values.get("fixed_defense_weight", 0)) * 100
                     negative_threshold.value = values.get("negative_threshold", 1)
                     risk_enabled.value = values.get("risk_enabled", False)
-                    canary_tickers.value = ", ".join(values.get("canary_tickers", []))
+                    canary_tickers.set_values(values.get("canary_tickers", []))
                     risk_apply.value = values.get("risk_apply_mode", "중립형")
                     risk_direction.value = values.get("risk_direction", "마이너스(-)")
                     risk_momentum_type.value = values.get("risk_momentum_type", "절대 모멘텀")
@@ -370,7 +373,7 @@ def functions_page(feature_id: str) -> None:
                         "contribution_amount": float(contribution.value) if investment_type.value == "적립식" else 0.0,
                         "contribution_frequency": str(contribution_frequency.value),
                         "market": str(market.value), "currency": "KRW" if market.value == "국내 ETF" else "USD",
-                        "attack_tickers": _tickers(attack_tickers.value), "defense_tickers": _tickers(defense_tickers.value),
+                        "attack_tickers": attack_tickers.values(), "defense_tickers": defense_tickers.values(),
                         "attack_mode": str(attack_mode.value), "attack_select_count": int(attack_count.value),
                         "attack_relative": attack_relative, "attack_absolute": attack_absolute,
                         "attack_use_bil": bool(attack_use_bil.value),
@@ -384,7 +387,7 @@ def functions_page(feature_id: str) -> None:
                         "negative_momentum": attack_relative, "positive_same_momentum": True,
                         "positive_momentum": attack_relative,
                         "risk_avoidance": {
-                            "enabled": bool(risk_enabled.value), "tickers": _tickers(canary_tickers.value),
+                            "enabled": bool(risk_enabled.value), "tickers": canary_tickers.values(),
                             "apply_mode": str(risk_apply.value), "direction": str(risk_direction.value),
                             "momentum_type": str(risk_momentum_type.value), "same_momentum": bool(risk_same_momentum.value),
                             "custom_momentum": risk_custom,
@@ -409,22 +412,17 @@ def functions_page(feature_id: str) -> None:
             elif feature_id == "return_comparison":
                 ui.separator()
                 ui.label("비교 종목 입력").classes("section-title")
-                ui.label("최대 10개까지 입력할 수 있습니다. 티커 또는 종목 코드를 입력하세요.").classes("status-text")
-                ticker_inputs = []
-                defaults = [""] * 10
-                with ui.grid(columns=2).classes("backtest-field-grid w-full"):
-                    for index, default in enumerate(defaults, start=1):
-                        ticker_inputs.append(ui.input(f"종목 {index}", value=default, placeholder="예: AAPL"))
+                ticker_picker = TickerPicker(max_items=10, label="비교 종목")
                 getter = lambda: comparison(
-                    list(dict.fromkeys(str(field.value).strip().upper() for field in ticker_inputs if str(field.value or "").strip())),
+                    ticker_picker.values(),
                     _date(start.value), _date(end.value),
                 )
             elif feature_id == "periodic_returns":
+                ticker = TickerPicker(defaults=["SPY"], max_items=1, label="분석 종목")
                 with ui.row().classes("backtest-field-grid w-full"):
-                    ticker = ui.input("분석 종목", value="SPY", placeholder="예: SPY 또는 AAPL")
                     frequency = ui.select(["월", "분기", "반기", "년"], value="월", label="집계 주기")
                 ui.label("조회 구간이 주기 중간에 걸치면 해당 부분 기간도 포함합니다.").classes("status-text")
-                getter = lambda: periodic(str(ticker.value), _date(start.value), _date(end.value), str(frequency.value))
+                getter = lambda: periodic(ticker.value(), _date(start.value), _date(end.value), str(frequency.value))
             elif feature_id == "portfolio_backtest":
                 with ui.row().classes("backtest-field-grid w-full"):
                     initial = ui.number("초기 투자금", value=10_000, min=1)
@@ -442,19 +440,15 @@ def functions_page(feature_id: str) -> None:
                 ui.separator()
                 ui.label("포트폴리오 구성").classes("section-title")
                 ui.label("최대 5개 자산의 목표 비중을 입력하세요. 합계는 100%여야 합니다.").classes("status-text")
-                ticker_inputs = []
-                weight_inputs = []
-                defaults = [("", 0), ("", 0), ("", 0), ("", 0), ("", 0)]
-                for index, (default_ticker, default_weight) in enumerate(defaults, start=1):
-                    with ui.row().classes("backtest-field-grid w-full"):
-                        ticker_inputs.append(ui.input(f"자산 {index}", value=default_ticker, placeholder="예: VTI"))
-                        weight_inputs.append(ui.number(f"비중 {index}(%)", value=default_weight, min=0, max=100, step=1))
+                portfolio_picker = TickerPicker(
+                    max_items=5, label="포트폴리오 자산", weighted=True,
+                )
 
                 def portfolio_result() -> ToolResult:
                     pairs = [
-                        (str(ticker.value).strip().upper(), float(weight.value or 0))
-                        for ticker, weight in zip(ticker_inputs, weight_inputs)
-                        if str(ticker.value or "").strip() and float(weight.value or 0) > 0
+                        (ticker, weight)
+                        for ticker, weight in portfolio_picker.weighted_values()
+                        if weight > 0
                     ]
                     return static_portfolio(
                         [ticker for ticker, _ in pairs], [weight for _, weight in pairs],
@@ -466,8 +460,10 @@ def functions_page(feature_id: str) -> None:
                 getter = portfolio_result
             elif feature_id == "allocation_sweep":
                 ui.label("자산과 탐색 간격").classes("section-title")
+                allocation_tickers = TickerPicker(
+                    defaults=["SPY", "IEF"], max_items=3, label="분석 종목",
+                )
                 with ui.row().classes("backtest-field-grid w-full"):
-                    tickers = ui.input("종목 2~3개(쉼표 구분)", value="SPY,IEF")
                     step = ui.select([5, 10, 20], value=10, label="비중 간격(%)")
                     rebalance = ui.select(["매일", "매월", "매분기", "매년"], value="매일", label="리밸런싱 주기")
                     initial = ui.number("기준 투자금", value=10_000, min=1)
@@ -484,7 +480,7 @@ def functions_page(feature_id: str) -> None:
                 fixed.on_value_change(lambda _: toggle_fixed())
 
                 def allocation_result() -> ToolResult:
-                    selected = _tickers(tickers.value)
+                    selected = allocation_tickers.values()
                     if fixed.value and len(selected) != 3:
                         raise ValueError("고정 비중은 종목 3개일 때 사용할 수 있습니다.")
                     ratio = int(fixed_ratio.value)
@@ -500,8 +496,8 @@ def functions_page(feature_id: str) -> None:
                 getter = allocation_result
             elif feature_id in {"monte_carlo_normal", "monte_carlo_bootstrap"}:
                 ui.label("시뮬레이션 설정").classes("section-title")
+                ticker = TickerPicker(defaults=["QQQ"], max_items=1, label="시뮬레이션 종목")
                 with ui.row().classes("backtest-field-grid w-full"):
-                    ticker = ui.input("종목", value="QQQ")
                     years = ui.number("예측 기간(년)", value=10, min=0.5, max=50, step=0.5)
                     simulations = ui.number("시뮬레이션 수", value=5000, min=100, max=10000)
                     initial = ui.number("초기 투자금", value=10_000, min=1)
@@ -513,7 +509,7 @@ def functions_page(feature_id: str) -> None:
                 recurring.on_value_change(lambda _: recurring_fields.set_visibility(bool(recurring.value)))
                 method = "normal" if feature_id.endswith("normal") else "bootstrap"
                 getter = lambda: monte_carlo(
-                    str(ticker.value), _date(start.value), _date(end.value), float(years.value),
+                    ticker.value(), _date(start.value), _date(end.value), float(years.value),
                     int(simulations.value), float(initial.value), method,
                     float(recurring_amount.value) if recurring.value else 0.0,
                     str(contribution_frequency.value),
@@ -680,8 +676,8 @@ def functions_page(feature_id: str) -> None:
                 getter = financial_result
             elif feature_id == "moving_average":
                 ui.label("이동평균·시그널 설정").classes("section-title")
+                ticker = TickerPicker(defaults=["QQQ"], max_items=1, label="분석 종목")
                 with ui.row().classes("backtest-field-grid w-full"):
-                    ticker = ui.input("종목", value="QQQ")
                     months = ui.number("이동평균 기간(개월)", value=10, min=1, max=60)
                     confirmation = ui.number("확인 횟수", value=1, min=1)
                     limit_days = ui.number("시그널 대기 LIMIT(거래일)", value=5, min=1)
@@ -693,21 +689,21 @@ def functions_page(feature_id: str) -> None:
                 recurring_fields.set_visibility(False)
                 recurring.on_value_change(lambda _: recurring_fields.set_visibility(bool(recurring.value)))
                 getter = lambda: moving_average(
-                    str(ticker.value), _date(start.value), _date(end.value), int(months.value),
+                    ticker.value(), _date(start.value), _date(end.value), int(months.value),
                     float(initial.value), float(contribution.value) if recurring.value else 0.0,
                     str(contribution_frequency.value), int(confirmation.value), int(limit_days.value),
                 )
             elif feature_id == "laoer_infinite":
                 ui.label("V2.2 분할매수 설정").classes("section-title")
+                ticker = TickerPicker(defaults=["TQQQ"], max_items=1, label="분할매수 종목")
                 with ui.row().classes("backtest-field-grid w-full"):
-                    ticker = ui.input("종목", value="TQQQ")
                     divisions = ui.number("분할 횟수", value=40, min=10, max=100)
                     initial = ui.number("초기 투자금", value=40_000, min=100)
                     fee = ui.number("거래비용(%)", value=0, min=0, max=2, step=0.01)
                 quarter_stop = ui.checkbox("쿼터손절 모드 포함(근사 구현)", value=False)
                 ui.label("V2.2의 T값·별%·전/후반 LOC 매수·부분매도·+10% 지정가를 일봉 OHLC로 근사합니다.").classes("status-text")
                 getter = lambda: laoer(
-                    str(ticker.value), _date(start.value), _date(end.value),
+                    ticker.value(), _date(start.value), _date(end.value),
                     float(initial.value), int(divisions.value), float(fee.value), bool(quarter_stop.value),
                 )
             elif feature_id == "real_estate_vs_stock":
@@ -720,6 +716,7 @@ def functions_page(feature_id: str) -> None:
                     repayment = ui.select(["원리금균등상환", "원금균등상환"], value="원리금균등상환", label="대출상환방식")
                     growth = ui.number("부동산 연 상승률(%)", value=2.0, step=0.1)
                 ui.label("월세·주식 조건").classes("section-title")
+                ticker = TickerPicker(defaults=["VOO"], max_items=1, label="비교 주식")
                 with ui.row().classes("backtest-field-grid w-full"):
                     monthly_rent = ui.number("월세", value=1_000_000, min=0)
                     deposit = ui.number("보증금", value=50_000_000, min=0)
@@ -728,7 +725,6 @@ def functions_page(feature_id: str) -> None:
                         value=24, label="월세 인상 주기",
                     )
                     rent_growth = ui.number("월세 상승률(연 %)", value=5.0, min=0, step=0.1)
-                    ticker = ui.select(["VOO", "QQQ", "QLD"], value="VOO", label="주식 종목")
                 ui.label("주가 경로 설정").classes("section-title")
                 with ui.row().classes("backtest-field-grid w-full"):
                     path_method = ui.select(
@@ -760,7 +756,7 @@ def functions_page(feature_id: str) -> None:
                         field.on_value_change(lambda _, update=update_real_estate_preview: update())
                     update_real_estate_preview()
                 getter = lambda: real_estate_vs_stock(
-                    str(ticker.value), _date(start.value), _date(end.value), float(property_price.value),
+                    ticker.value(), _date(start.value), _date(end.value), float(property_price.value),
                     float(loan.value), 0.0, int(years.value), float(growth.value),
                     float(annual_rate.value), str(repayment.value), float(monthly_rent.value),
                     int(rent_cycle.value), float(rent_growth.value), int(loan_years.value),
@@ -795,14 +791,10 @@ def functions_page(feature_id: str) -> None:
                         lambda _: fg_contribution_fields.set_visibility(investment_type.value == "적립식")
                     )
                     ui.label("투자 포트폴리오").classes("section-title")
-                    fg_tickers = []
-                    fg_weights = []
-                    for index, (default_ticker, default_weight) in enumerate(
-                        [("SPY", 100), ("", 0), ("", 0), ("", 0), ("", 0)], start=1
-                    ):
-                        with ui.row().classes("backtest-field-grid w-full"):
-                            fg_tickers.append(ui.input(f"자산 {index}", value=default_ticker, placeholder="예: SPY 또는 QQQ"))
-                            fg_weights.append(ui.number(f"비중 {index}(%)", value=default_weight, min=0, max=100))
+                    fg_tickers = TickerPicker(
+                        defaults=["SPY"], default_weights=[100], max_items=5,
+                        label="투자 자산", weighted=True,
+                    )
                 with ui.column().classes("w-full gap-3") as fg_compare:
                     ui.label("두 공포·탐욕 세부 지표를 비교합니다.").classes("status-text")
                     with ui.row().classes("backtest-field-grid w-full"):
@@ -827,9 +819,9 @@ def functions_page(feature_id: str) -> None:
                             _date(start.value), _date(end.value), str(fg_first.value), str(fg_second.value)
                         )
                     pairs = [
-                        (str(ticker.value or "").strip().upper(), float(weight.value or 0))
-                        for ticker, weight in zip(fg_tickers, fg_weights)
-                        if str(ticker.value or "").strip() and float(weight.value or 0) > 0
+                        (ticker, weight)
+                        for ticker, weight in fg_tickers.weighted_values()
+                        if weight > 0
                     ]
                     return fear_greed(
                         _date(start.value), _date(end.value),

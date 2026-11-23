@@ -68,6 +68,23 @@ APP_CSS = r"""
       gap: 12px;
       align-items: start;
     }
+    .period-date-grid {
+      grid-template-columns: minmax(105px, .7fr) repeat(2, minmax(150px, 1fr)) !important;
+    }
+    .ticker-search-grid {
+      display: grid !important;
+      grid-template-columns: minmax(100px, .55fr) minmax(170px, 1fr) minmax(220px, 1.5fr) auto;
+      gap: 10px;
+    }
+    .ticker-list { border: 1px solid #eceef4; border-radius: 14px; padding: 8px; }
+    .ticker-list-row { min-height: 52px; padding: 5px 7px; border-bottom: 1px solid #f0f1f5; gap: 10px; }
+    .ticker-list-row:last-child { border-bottom: 0; }
+    .ticker-index { width: 24px; color: #8991a2; text-align: center; flex: 0 0 auto; }
+    .ticker-list-label { min-width: 0; flex: 1 1 auto; overflow: hidden;
+      text-overflow: ellipsis; white-space: nowrap; }
+    .ticker-weight { width: 120px !important; flex: 0 0 120px; }
+    .ticker-delete { flex: 0 0 auto; }
+    .ticker-empty { width: 100%; padding: 14px; text-align: center; color: #8991a2; }
     .editor-fields > *, .backtest-field-grid > * {
       width: 100% !important;
       min-width: 0 !important;
@@ -118,6 +135,18 @@ APP_CSS = r"""
         grid-template-columns: 1fr !important;
         gap: 10px;
       }
+      .period-date-grid {
+        grid-template-columns: minmax(82px, .65fr) repeat(2, minmax(0, 1fr)) !important;
+        gap: 7px !important;
+      }
+      .period-date-grid .q-field__label { font-size: .74rem; }
+      .period-date-grid .q-field__native,
+      .period-date-grid .q-field__input { font-size: .82rem; padding-left: 0; padding-right: 0; }
+      .ticker-search-grid { grid-template-columns: minmax(90px, .6fr) minmax(0, 1.4fr) auto !important; }
+      .ticker-candidate { grid-column: 1 / -1; grid-row: 2; }
+      .ticker-add { grid-column: 3; grid-row: 1; min-width: 78px; }
+      .ticker-list-label { font-size: .86rem; }
+      .ticker-weight { width: 92px !important; flex-basis: 92px; }
       .backtest-date-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
       .editor-fields .control-grow, .backtest-field-grid .control-grow {
         min-width: 0 !important;

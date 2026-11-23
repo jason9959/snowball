@@ -51,7 +51,7 @@ class ModularLayoutTests(unittest.TestCase):
         common = ROOT / "common" / "snowball"
         for name in (
             "layout.py", "styles.py", "backtest_results.py", "preset_store.py",
-            "period_controls.py",
+            "period_controls.py", "symbols.py", "ticker_picker.py",
         ):
             self.assertTrue((common / name).is_file())
         layout = (common / "layout.py").read_text(encoding="utf-8")
@@ -70,6 +70,7 @@ class ModularLayoutTests(unittest.TestCase):
         self.assertNotIn("streamlit.app", layout)
         route = (ROOT / "features" / "functions_nicegui" / "page.py").read_text(encoding="utf-8")
         self.assertIn('@ui.page("/functions/{feature_id}")', route)
+        self.assertIn("TickerPicker", route)
         for feature_id in (
             "return_comparison", "periodic_returns", "portfolio_backtest",
             "dynamic_portfolio", "allocation_sweep", "monte_carlo_normal",
