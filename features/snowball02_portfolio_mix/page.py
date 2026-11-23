@@ -11,6 +11,7 @@ from nicegui import run, ui
 
 from common.snowball.backtest_results import render_backtest_result
 from common.snowball.layout import shell
+from common.snowball.period_controls import create_period_controls
 from common.snowball.preset_store import load_browser_presets, restore_local_presets
 from snowball.builtin_library import (
     builtin_user_preset,
@@ -64,13 +65,12 @@ def page() -> None:
             second_select = ui.select(
                 options, value=builtin_titles[1], label="두 번째 프리셋",
             ).props("outlined options-dense").classes("w-full")
-            with ui.row().classes("backtest-field-grid backtest-date-grid w-full"):
-                start_input = ui.input("시작일", value="2010-01-01").props(
-                    "type=date"
-                ).classes("date-input")
-                end_input = ui.input(
-                    "종료일", value=datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat(),
-                ).props("type=date").classes("date-input")
+            with ui.row().classes("backtest-field-grid w-full"):
+                dates = create_period_controls(
+                    default_start=date(2010, 1, 1),
+                    default_end=datetime.now(ZoneInfo("Asia/Seoul")).date(),
+                )
+                start_input, end_input = dates.start, dates.end
             with ui.row().classes("backtest-field-grid w-full"):
                 initial = ui.number(
                     "초기 투자금", value=10_000, min=100, step=1_000,

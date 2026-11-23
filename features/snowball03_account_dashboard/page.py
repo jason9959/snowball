@@ -14,6 +14,7 @@ import pandas as pd
 from nicegui import run, ui
 
 from common.snowball.layout import shell
+from common.snowball.period_controls import create_period_controls
 from snowball.account_store import ACCOUNT_PREFIX, GoogleSheetAccountStore
 from snowball.account_dashboard import (
     AccountDashboardData,
@@ -551,12 +552,16 @@ async def account_dashboard_page(account_tab: str) -> None:
             (pd.Timestamp(today) - pd.DateOffset(years=5)).date(),
         )
         with controls:
-            start_input = ui.input("조회 시작일", value=default_start.isoformat()).props(
-                f"type=date min={first_date.isoformat()} max={today.isoformat()}"
-            ).classes("date-input")
-            end_input = ui.input("조회 종료일", value=today.isoformat()).props(
-                f"type=date min={first_date.isoformat()} max={today.isoformat()}"
-            ).classes("date-input")
+            dates = create_period_controls(
+                default_start=default_start,
+                default_end=today,
+                default_period="5",
+                start_label="조회 시작일",
+                end_label="조회 종료일",
+                minimum=first_date,
+                maximum=today,
+            )
+            start_input, end_input = dates.start, dates.end
             apply_button = ui.button("조회", icon="search").classes("primary-action")
 
         async def render(force_sheet: bool = False, force_prices: bool = False) -> None:

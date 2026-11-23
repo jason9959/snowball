@@ -38,6 +38,7 @@ from common.functions.specialized import (
     reb_statistics_multi,
 )
 from common.snowball.layout import shell
+from common.snowball.period_controls import create_period_controls, period_start
 
 
 TOOLS = {
@@ -152,9 +153,12 @@ def _render_result(result: ToolResult) -> None:
 
 def _common_dates() -> tuple[ui.input, ui.input]:
     today = dt.date.today()
-    start = ui.input("시작일", value=(today - dt.timedelta(days=365 * 10)).isoformat()).props("type=date").classes("control-grow")
-    end = ui.input("종료일", value=today.isoformat()).props("type=date").classes("control-grow")
-    return start, end
+    controls = create_period_controls(
+        default_start=period_start(today, 10),
+        default_end=today,
+        default_period="10",
+    )
+    return controls.start, controls.end
 
 
 @ui.page("/functions/{feature_id}")

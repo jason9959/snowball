@@ -12,6 +12,7 @@ import pandas as pd
 from nicegui import app, run, ui
 
 from common.snowball.layout import shell
+from common.snowball.period_controls import create_period_controls
 from .analytics import (
     annual_performance,
     execution_warnings,
@@ -547,7 +548,7 @@ def render_split_trading_page(
         saved_test_mode = "single"
     saved_funding_mode = forced_funding_mode
     state: dict[str, object] = {
-        "result": None, "conditions": None, "search_version": 0, "date_sync": False,
+        "result": None, "conditions": None, "search_version": 0,
         "restoring": True,
     }
 
@@ -580,17 +581,15 @@ def render_split_trading_page(
             search_status = ui.label(
                 "저장된 종목을 복원했습니다." if saved_symbol else "종목명이나 코드를 입력하세요."
             ).classes("status-text")
-            period = ui.select(
-                {**{str(year): f"{year}년" for year in range(1, 11)}, "custom": "직접 설정"},
-                value=saved_period, label="기간",
-            ).props("outlined").classes("control-grow")
-            with ui.row().classes("backtest-field-grid backtest-date-grid w-full"):
-                start_input = ui.input(
-                    "From", value=str(saved.get("start", default_start.isoformat())),
-                ).props("type=date").classes("date-input")
-                end_input = ui.input(
-                    "To", value=str(saved.get("end", today.isoformat())),
-                ).props("type=date").classes("date-input")
+            with ui.row().classes("backtest-field-grid w-full"):
+                dates = create_period_controls(
+                    default_start=date.fromisoformat(str(saved.get("start", default_start.isoformat()))),
+                    default_end=date.fromisoformat(str(saved.get("end", today.isoformat()))),
+                    default_period=saved_period,
+                    start_label="From",
+                    end_label="To",
+                )
+                period, start_input, end_input = dates.period, dates.start, dates.end
             funding_mode = ui.select(
                 {
                     forced_funding_mode: (
@@ -870,19 +869,6 @@ def render_split_trading_page(
                 "백테스트 실행" if mode == "single" else "조건 비교 실행"
             )
             persist_form()
-
-        def apply_period() -> None:
-            if period.value == "custom":
-                return
-            end = datetime.now(ZoneInfo("Asia/Seoul")).date()
-            state["date_sync"] = True
-            end_input.value = end.isoformat()
-            start_input.value = (pd.Timestamp(end) - pd.DateOffset(years=int(period.value))).date().isoformat()
-            ui.timer(.05, lambda: state.__setitem__("date_sync", False), once=True)
-
-        def mark_custom() -> None:
-            if not state["date_sync"]:
-                period.value = "custom"
 
         async def search() -> None:
             state["search_version"] = int(state["search_version"]) + 1
@@ -1237,11 +1223,9 @@ def render_split_trading_page(
                 run_button.enable()
 
         def period_changed() -> None:
-            apply_period()
             persist_form()
 
         def date_changed() -> None:
-            mark_custom()
             persist_form()
 
         async def query_changed() -> None:

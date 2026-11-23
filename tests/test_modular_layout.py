@@ -49,7 +49,10 @@ class ModularLayoutTests(unittest.TestCase):
 
     def test_snowball_common_is_namespaced(self):
         common = ROOT / "common" / "snowball"
-        for name in ("layout.py", "styles.py", "backtest_results.py", "preset_store.py"):
+        for name in (
+            "layout.py", "styles.py", "backtest_results.py", "preset_store.py",
+            "period_controls.py",
+        ):
             self.assertTrue((common / name).is_file())
         layout = (common / "layout.py").read_text(encoding="utf-8")
         styles = (common / "styles.py").read_text(encoding="utf-8")
