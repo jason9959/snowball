@@ -14,6 +14,7 @@ import pandas as pd
 from nicegui import run, ui
 
 from common.snowball.layout import shell
+from common.snowball.serialization import dataframe_records
 from common.snowball.period_controls import create_period_controls
 from snowball.account_store import ACCOUNT_PREFIX, GoogleSheetAccountStore
 from snowball.account_dashboard import (
@@ -396,7 +397,7 @@ def _render_dashboard_content(account_tab: str, data: AccountDashboardData) -> N
                 ledger = data.ledger.fillna("").astype(str)
                 ui.table(
                     columns=_table_columns(list(ledger.columns)),
-                    rows=ledger.to_dict("records"), pagination={"rowsPerPage": 15},
+                    rows=dataframe_records(ledger), pagination={"rowsPerPage": 15},
                 ).props("flat bordered dense").classes("w-full account-table")
                 ui.button(
                     "조회기간 CSV 다운로드", icon="download",

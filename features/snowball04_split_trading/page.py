@@ -13,6 +13,7 @@ from nicegui import app, run, ui
 
 from common.snowball.layout import shell
 from common.snowball.period_controls import create_period_controls
+from common.snowball.serialization import dataframe_records
 from .analytics import (
     annual_performance,
     execution_warnings,
@@ -215,7 +216,7 @@ def _render_asset_summary(result: dict, country: str) -> None:
     ui.label("종목별 운용 결과").classes("section-title")
     ui.table(
         columns=_table_columns(list(display.columns)),
-        rows=display.fillna("").to_dict("records"), pagination={"rowsPerPage": 10},
+        rows=dataframe_records(display.fillna("")), pagination={"rowsPerPage": 10},
     ).props("flat bordered dense").classes("w-full account-table")
 
 
@@ -232,6 +233,13 @@ def _render_result(result: dict, country: str, symbol_label: str) -> None:
     with ui.expansion("운용 품질·기간 검증·경고", icon="fact_check", value=False).classes(
         "strategy-expansion w-full"
     ):
+        recovery_cards = ((
+            "현금 부족 대기 주문", f"{int(result.get('pending_orders', 0))}건",
+        ), (
+            "현재 복원 대기", f"{int(result.get('active_recoveries', 0))}건",
+        ), (
+            "누적 복원 완료", f"{int(result.get('recovery_completed', 0))}건",
+        )) if "pending_orders" in result else ()
         operation_cards = (
             ("매수 횟수", f"{operations['매수 횟수']}회"),
             ("매도 횟수", f"{operations['매도 횟수']}회"),
@@ -241,7 +249,7 @@ def _render_result(result: dict, country: str, symbol_label: str) -> None:
             ("평균 현금비중", f"{operations['평균 현금비중']:.1%}"),
             ("미청산 차수", f"{operations['미청산 보유 차수']}개"),
             ("총 거래비용", _money(operations["총 거래비용"], country)),
-        )
+        ) + recovery_cards
         with ui.grid().classes("result-metric-grid w-full gap-2"):
             for label, value in operation_cards:
                 with ui.card().classes("metric-card w-full"):
@@ -264,18 +272,20 @@ def _render_result(result: dict, country: str, symbol_label: str) -> None:
                     )
             ui.table(
                 columns=_table_columns(list(display_frame.columns)),
-                rows=display_frame.to_dict("records"),
+                rows=dataframe_records(display_frame),
                 pagination={"rowsPerPage": 10},
             ).props("flat bordered dense").classes("w-full account-table")
     ui.label("체결 내역").classes("section-title")
     display = result["trades"].copy()
     for column in (
-        "시뮬레이션 체결가", "체결금액", "실현손익", "체결 후 현금잔액",
+        "시뮬레이션 체결가", "주문 기준가", "복원 목표가",
+        "체결금액", "실현손익", "체결 후 현금잔액",
         "거래비용",
     ):
-        display[column] = display[column].map(
-            lambda value: "" if pd.isna(value) else _number(float(value), country)
-        )
+        if column in display:
+            display[column] = display[column].map(
+                lambda value: "" if pd.isna(value) else _number(float(value), country)
+            )
     quantity_digits = 0 if result["quantity_mode"] == "whole" else 6
     display["수량"] = display["수량"].map(
         lambda value: "" if pd.isna(value) else f"{float(value):,.{quantity_digits}f}"
@@ -285,7 +295,7 @@ def _render_result(result: dict, country: str, symbol_label: str) -> None:
     )
     ui.table(
         columns=_table_columns(list(display.columns)),
-        rows=display.fillna("").to_dict("records"), pagination={"rowsPerPage": 15},
+        rows=dataframe_records(display.fillna("")), pagination={"rowsPerPage": 15},
     ).props("flat bordered dense").classes("w-full account-table")
 def _optimization_table(frame: pd.DataFrame, country: str) -> pd.DataFrame:
     display = frame.copy()
@@ -559,7 +569,7 @@ def _render_optimization(
     display = _optimization_table(raw_table, country)
     ui.table(
         columns=_table_columns(list(display.columns)),
-        rows=display.fillna("").to_dict("records"), pagination={"rowsPerPage": 15},
+        rows=dataframe_records(display.fillna("")), pagination={"rowsPerPage": 15},
     ).props("flat bordered dense").classes("w-full account-table")
     ui.button(
         "최적화 전체 결과 CSV", icon="download",

@@ -55,7 +55,7 @@ class ModularLayoutTests(unittest.TestCase):
         common = ROOT / "common" / "snowball"
         for name in (
             "layout.py", "styles.py", "backtest_results.py", "preset_store.py",
-            "period_controls.py", "symbols.py", "ticker_picker.py",
+            "period_controls.py", "symbols.py", "ticker_picker.py", "serialization.py",
         ):
             self.assertTrue((common / name).is_file())
         layout = (common / "layout.py").read_text(encoding="utf-8")

@@ -288,15 +288,33 @@ def laoer(
     from features.feature12_laoer.data_loader import load_ohlc
 
     output = run_v22(load_ohlc(ticker, start, end), initial, divisions, fee_percent / 100.0, quarter_stop)
+    metric_labels = {
+        "initial_capital": "초기 투자금", "final_value": "최종 평가액",
+        "profit": "평가손익", "return_pct": "총수익률",
+        "cagr_pct": "연환산 수익률", "mdd_pct": "최대 낙폭(MDD)",
+        "completed_cycles": "완료 사이클", "max_t": "최대 진행 차수(T)",
+        "ending_cash": "최종 현금", "ending_shares": "최종 보유수량",
+        "ending_avg": "최종 평균단가",
+    }
     metrics = {
-        str(key): (
+        metric_labels.get(str(key), str(key)): (
             f"{value:.2f}%" if str(key).lower().endswith("_pct")
             else f"{value:,.2f}" if isinstance(value, (int, float))
             else str(value)
         )
         for key, value in output.metrics.items()
     }
-    return ToolResult("라오어 무한매수법", metrics, {"포트폴리오": output.daily["portfolio_value"]}, output.trades.tail(100))
+    trades = output.trades.rename(columns={
+        "date": "날짜", "cycle": "사이클", "side": "매수/매도",
+        "price": "체결가", "amount": "체결금액", "shares": "수량",
+        "note": "거래 사유",
+    }).copy()
+    if "매수/매도" in trades:
+        trades["매수/매도"] = trades["매수/매도"].replace({"BUY": "매수", "SELL": "매도"})
+    return ToolResult(
+        "라오어 무한매수법", metrics,
+        {"포트폴리오 평가액": output.daily["portfolio_value"]}, trades.tail(100),
+    )
 
 
 def real_estate_vs_stock(

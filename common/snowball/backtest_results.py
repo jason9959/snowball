@@ -8,6 +8,8 @@ import numpy as np
 import pandas as pd
 from nicegui import ui
 
+from common.snowball.serialization import dataframe_records
+
 from snowball.exports import (
     diagnostic_frames,
     diagnostic_zip,
@@ -42,7 +44,7 @@ def _result_table(frame: pd.DataFrame, rows_per_page: int = 12) -> None:
     for column in visible.columns:
         visible[column] = visible[column].astype(str)
     ui.table(
-        columns=_table_columns(list(visible.columns)), rows=visible.to_dict("records"),
+        columns=_table_columns(list(visible.columns)), rows=dataframe_records(visible),
         pagination={"rowsPerPage": rows_per_page},
     ).props("flat bordered dense").classes("w-full account-table")
 

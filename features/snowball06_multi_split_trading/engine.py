@@ -16,7 +16,8 @@ from features.snowball04_split_trading.engine import (
 
 MULTI_TRADE_COLUMNS = (
     "거래일", "당일 순번", "종목", "매수/매도", "차수", "거래 ID",
-    "시뮬레이션 체결가", "수량", "체결금액", "실현손익", "실현수익률",
+    "시뮬레이션 체결가", "주문 기준가", "복원 목표가", "거래 상태",
+    "수량", "체결금액", "실현손익", "실현수익률",
     "체결 후 현금잔액", "거래비용",
 )
 
@@ -79,6 +80,21 @@ class _Position:
     price: float
     quantity: float
     cost_basis: float
+    reference_price: float | None = None
+    restore_target: float | None = None
+    role: str = "normal"
+
+    @property
+    def strategy_price(self) -> float:
+        return float(self.reference_price or self.price)
+
+
+@dataclass
+class _PendingOrder:
+    slot: int
+    target: float
+    created: pd.Timestamp
+    recovery_child: bool = False
 
 
 @dataclass
@@ -89,6 +105,9 @@ class _AssetState:
     temporary_base: float
     confirmed_base: float | None
     previous_close: float
+    pending: dict[int, _PendingOrder]
+    recovery_slot: int | None = None
+    recovery_peak: float | None = None
 
 
 def _aligned_prices(prices: dict[str, pd.Series]) -> tuple[dict[str, pd.Series], pd.DataFrame]:
@@ -147,6 +166,12 @@ def run_multi_split_backtest(
             "거래일": day.date().isoformat(), "당일 순번": sequence,
             "종목": symbol, "매수/매도": side, "차수": slot,
             "거래 ID": position.trade_id, "시뮬레이션 체결가": float(price),
+            "주문 기준가": position.strategy_price,
+            "복원 목표가": position.restore_target,
+            "거래 상태": {
+                "recovery_base": "복원 대기 물량",
+                "recovery_child": "복원 중 추가 물량",
+            }.get(position.role, "정상 물량"),
             "수량": position.quantity, "체결금액": float(price * position.quantity),
             "실현손익": profit if side == "매도" else None,
             "실현수익률": (
@@ -178,8 +203,13 @@ def run_multi_split_backtest(
         cost = gross * buy_cost_rate
         spend = gross + cost
         cash -= spend
-        position = _Position(1, f"{symbol}-T{next(ids):06d}", execution, quantity, spend)
-        states[symbol] = _AssetState(rule, clean[symbol], {1: position}, close, None, close)
+        position = _Position(
+            1, f"{symbol}-T{next(ids):06d}", execution, quantity, spend,
+            reference_price=execution,
+        )
+        states[symbol] = _AssetState(
+            rule, clean[symbol], {1: position}, close, None, close, {},
+        )
         record(first_date, symbol, "매수", 1, execution, position, cost=cost)
 
     split_values: list[float] = []
@@ -187,10 +217,12 @@ def run_multi_split_backtest(
     holding_values: list[float] = []
     position_counts: list[int] = []
     per_asset_values = {symbol: [] for symbol in symbols}
+    recovery_started = 0
+    recovery_completed = 0
 
     for day in frame.index:
         if day != first_date:
-            buy_candidates: list[tuple[str, int, float]] = []
+            newly_triggered: list[tuple[str, _PendingOrder]] = []
             # Sells across every asset are credited before any same-day buys.
             for symbol in symbols:
                 state = states[symbol]
@@ -198,18 +230,23 @@ def run_multi_split_backtest(
                     continue
                 close = float(state.prices.loc[day])
                 previous = state.previous_close
-                extras = {slot: pos for slot, pos in state.positions.items() if slot > 1}
-                if not extras:
-                    state.temporary_base = max(
-                        state.temporary_base, close if close >= previous else previous,
-                    )
+                recovery = (
+                    state.positions.get(state.recovery_slot)
+                    if state.recovery_slot is not None else None
+                )
                 if close > previous:
                     sellable = []
                     for slot, position in state.positions.items():
                         if slot == 1:
                             continue
-                        target = position.price * (1.0 + state.rule.sell_rise)
-                        if previous <= target <= close:
+                        # The delayed fill is the temporary first position of
+                        # its recovery cycle.  It must survive until the
+                        # originally missed price is restored; only its child
+                        # positions rotate in the meantime.
+                        if slot == state.recovery_slot and position.restore_target is not None:
+                            continue
+                        target = position.strategy_price * (1.0 + state.rule.sell_rise)
+                        if close + 1e-12 >= target:
                             sellable.append((target, slot, position))
                     for target, slot, position in sorted(sellable):
                         execution = target * (1.0 - config.slippage_rate)
@@ -220,32 +257,123 @@ def run_multi_split_backtest(
                         cash += proceeds
                         del state.positions[slot]
                         record(day, symbol, "매도", slot, execution, position, profit=profit, cost=cost)
-                    if sellable and not any(slot > 1 for slot in state.positions):
+                    if (
+                        sellable and state.recovery_slot is None
+                        and not any(slot > 1 for slot in state.positions)
+                    ):
                         state.temporary_base = max(float(state.confirmed_base or close), close)
                         state.confirmed_base = None
-                elif close < previous and state.rule.slot_count > 1:
-                    base = (
-                        state.temporary_base
-                        if not extras else float(state.confirmed_base or state.temporary_base)
+
+                recovery = (
+                    state.positions.get(state.recovery_slot)
+                    if state.recovery_slot is not None else None
+                )
+                if recovery is not None and recovery.restore_target is not None:
+                    restore_target = float(recovery.restore_target)
+                    state.recovery_peak = max(
+                        float(state.recovery_peak or recovery.price),
+                        min(close, restore_target),
                     )
-                    boundaries = {
-                        slot: base * (1.0 - state.rule.buy_drop) ** (slot - 1)
-                        for slot in range(2, state.rule.slot_count + 1)
+                    # Sell processing intentionally happens first.  With an
+                    # equal buy/sell rate every child target is below the
+                    # restore target: H(1-r)(1+r)=H(1-r²)<H.
+                    child_slots = [
+                        slot for slot in state.positions if slot > int(state.recovery_slot)
+                    ]
+                    if close + 1e-12 >= restore_target and not child_slots:
+                        recovery.reference_price = restore_target
+                        recovery.restore_target = None
+                        recovery.role = "normal"
+                        state.recovery_slot = None
+                        state.recovery_peak = None
+                        recovery_completed += 1
+                    elif close < previous and state.rule.slot_count > int(state.recovery_slot):
+                        peak = float(state.recovery_peak)
+                        boundaries = {
+                            slot: peak * (1.0 - state.rule.buy_drop) ** (
+                                slot - int(state.recovery_slot)
+                            )
+                            for slot in range(int(state.recovery_slot) + 1, state.rule.slot_count + 1)
+                        }
+                        for slot, boundary in sorted(
+                            boundaries.items(), key=lambda item: item[1], reverse=True,
+                        ):
+                            if (
+                                slot not in state.positions and slot not in state.pending
+                                and close <= boundary <= previous
+                            ):
+                                newly_triggered.append((
+                                    symbol,
+                                    _PendingOrder(slot, boundary, pd.Timestamp(day), True),
+                                ))
+                else:
+                    extras = {
+                        slot: pos for slot, pos in state.positions.items() if slot > 1
                     }
-                    for slot, boundary in sorted(boundaries.items(), key=lambda item: item[1], reverse=True):
-                        if slot not in state.positions and close <= boundary <= previous:
-                            buy_candidates.append((symbol, slot, boundary))
+                    if not extras:
+                        state.temporary_base = max(
+                            state.temporary_base,
+                            close if close >= previous else previous,
+                        )
+                    if close < previous and state.rule.slot_count > 1:
+                        base = (
+                            state.temporary_base
+                            if not extras
+                            else float(state.confirmed_base or state.temporary_base)
+                        )
+                        boundaries = {
+                            slot: base * (1.0 - state.rule.buy_drop) ** (slot - 1)
+                            for slot in range(2, state.rule.slot_count + 1)
+                        }
+                        for slot, boundary in sorted(
+                            boundaries.items(), key=lambda item: item[1], reverse=True,
+                        ):
+                            if (
+                                slot not in state.positions and slot not in state.pending
+                                and close <= boundary <= previous
+                            ):
+                                newly_triggered.append((
+                                    symbol,
+                                    _PendingOrder(slot, boundary, pd.Timestamp(day), False),
+                                ))
                 state.previous_close = close
 
-            total_request = sum(states[symbol].rule.tranche_amount for symbol, _, _ in buy_candidates)
-            scale = 1.0
-            if not reverse and total_request > cash:
-                scale = max(0.0, cash / total_request)
-            for symbol, slot, boundary in buy_candidates:
+            for symbol, order in newly_triggered:
+                states[symbol].pending.setdefault(order.slot, order)
+
+            # Pending requests are not reduced proportionally.  Available cash
+            # goes first to the asset that has fallen the most from its prior
+            # actually held step; the remaining requests stay pending.
+            eligible: list[tuple[float, pd.Timestamp, str, _PendingOrder]] = []
+            for symbol in symbols:
                 state = states[symbol]
-                execution = boundary * (1.0 + config.slippage_rate)
+                close = float(frame.loc[day, symbol])
+                for order in state.pending.values():
+                    if order.slot in state.positions or close > order.target + 1e-12:
+                        continue
+                    prior = [
+                        (slot, position.strategy_price)
+                        for slot, position in state.positions.items() if slot < order.slot
+                    ]
+                    anchor = (
+                        max(prior, key=lambda item: item[0])[1]
+                        if prior else state.temporary_base
+                    )
+                    decline = close / float(anchor) - 1.0
+                    eligible.append((decline, order.created, symbol, order))
+
+            for _, _, symbol, order in sorted(
+                eligible, key=lambda item: (item[0], item[1], item[2], item[3].slot),
+            ):
+                state = states[symbol]
+                if order.slot not in state.pending or order.slot in state.positions:
+                    continue
+                close = float(frame.loc[day, symbol])
+                delayed = pd.Timestamp(day) > order.created
+                raw_execution = min(close, order.target) if delayed else order.target
+                execution = raw_execution * (1.0 + config.slippage_rate)
                 unit_cost = execution * (1.0 + buy_cost_rate)
-                budget = state.rule.tranche_amount * scale
+                budget = state.rule.tranche_amount
                 quantity = _order_quantity(budget, unit_cost, config.quantity_mode)
                 if quantity <= 0:
                     if reverse:
@@ -259,11 +387,32 @@ def run_multi_split_backtest(
                 if state.confirmed_base is None:
                     state.confirmed_base = state.temporary_base
                 cash -= spend
-                position = _Position(
-                    slot, f"{symbol}-T{next(ids):06d}", execution, quantity, spend,
+                starts_recovery = (
+                    not reverse and delayed and not order.recovery_child
+                    and raw_execution < order.target - 1e-9
                 )
-                state.positions[slot] = position
-                record(day, symbol, "매수", slot, execution, position, cost=cost)
+                position = _Position(
+                    order.slot, f"{symbol}-T{next(ids):06d}", execution, quantity, spend,
+                    reference_price=(raw_execution if starts_recovery else order.target),
+                    restore_target=(order.target if starts_recovery else None),
+                    role=(
+                        "recovery_base" if starts_recovery
+                        else "recovery_child" if order.recovery_child else "normal"
+                    ),
+                )
+                state.positions[order.slot] = position
+                del state.pending[order.slot]
+                if starts_recovery:
+                    state.recovery_slot = order.slot
+                    state.recovery_peak = raw_execution
+                    # Deeper fixed-grid requests are superseded by the dynamic
+                    # high-watermark child ladder of the recovery position.
+                    state.pending = {
+                        slot: pending for slot, pending in state.pending.items()
+                        if slot < order.slot
+                    }
+                    recovery_started += 1
+                record(day, symbol, "매수", order.slot, execution, position, cost=cost)
 
         holdings = 0.0
         positions = 0
@@ -343,6 +492,8 @@ def run_multi_split_backtest(
             "매도 횟수": int((symbol_trades["매수/매도"] == "매도").sum()),
             "실현손익": realized, "미실현손익": final_value - open_cost,
             "최종 평가액": final_value, "현재 보유 차수": len(state.positions),
+            "대기 주문": len(state.pending),
+            "복원 대기 차수": state.recovery_slot or "-",
         })
     asset_summary = pd.DataFrame(summary_rows)
     final_holdings = float(holdings_nav.iloc[-1])
@@ -369,6 +520,10 @@ def run_multi_split_backtest(
         "return_difference": split_return - full_return,
         "actual_start": frame.index[0].date(), "actual_end": frame.index[-1].date(),
         "open_positions": int(sum(len(state.positions) for state in states.values())),
+        "pending_orders": int(sum(len(state.pending) for state in states.values())),
+        "active_recoveries": int(sum(state.recovery_slot is not None for state in states.values())),
+        "recovery_started": int(recovery_started),
+        "recovery_completed": int(recovery_completed),
         "remaining_buy_slots": int(sum(
             rule.slot_count - len(states[rule.symbol.strip().upper()].positions) for rule in rules
         )),

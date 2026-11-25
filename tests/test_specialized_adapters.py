@@ -19,12 +19,32 @@ from common.functions.specialized import (
     dynamic_portfolio,
     fear_greed,
     inflation_audit,
+    laoer,
     real_estate_vs_stock,
     reb_statistics_multi,
 )
 
 
 class SpecializedAdapterTests(unittest.TestCase):
+    def test_laoer_result_uses_korean_metric_and_trade_labels(self):
+        dates = pd.bdate_range("2025-01-02", periods=5)
+        ohlc = pd.DataFrame({
+            "Close": [100, 95, 90, 100, 110],
+            "High": [101, 96, 91, 101, 111],
+            "Low": [99, 94, 89, 99, 109],
+        }, index=dates)
+        with patch(
+            "features.feature12_laoer.data_loader.load_ohlc", return_value=ohlc,
+        ):
+            result = laoer(
+                "TQQQ", dates[0].date(), dates[-1].date(), 40_000, 40,
+            )
+        self.assertIn("초기 투자금", result.metrics)
+        self.assertIn("최대 낙폭(MDD)", result.metrics)
+        self.assertIn("매수/매도", result.table.columns)
+        self.assertIn("거래 사유", result.table.columns)
+        self.assertNotIn("initial_capital", result.metrics)
+
     def test_inflation_audit_reads_reproducible_summary(self):
         result = inflation_audit("일별")
         self.assertEqual(result.title, "인플레이션 나침반 검증 결과")

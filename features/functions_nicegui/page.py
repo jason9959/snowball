@@ -39,6 +39,7 @@ from common.functions.specialized import (
 )
 from common.snowball.layout import shell
 from common.snowball.period_controls import create_period_controls, period_start
+from common.snowball.serialization import dataframe_records
 from common.snowball.ticker_picker import TickerPicker
 
 
@@ -59,6 +60,78 @@ TOOLS = {
     "fear_greed_rebalance": "14. 공포·탐욕 지수 리밸런싱",
     "reb_statistics": "15. 한국부동산원 부동산 통계",
 }
+
+
+FUNCTION_LABELS = {
+    "date": "날짜", "cycle": "사이클", "side": "매수/매도",
+    "price": "체결가", "amount": "체결금액", "shares": "수량",
+    "note": "거래 사유", "Close": "종가", "High": "고가", "Low": "저가",
+    "cash": "현금", "cost_basis": "매입원금", "avg_price": "평균단가",
+    "T": "진행 차수(T)", "star_pct": "별%", "portfolio_value": "평가액",
+    "initial_capital": "초기 투자금", "final_value": "최종 평가액",
+    "profit": "평가손익", "return_pct": "총수익률",
+    "cagr_pct": "연환산 수익률", "mdd_pct": "최대 낙폭(MDD)",
+    "completed_cycles": "완료 사이클", "max_t": "최대 진행 차수(T)",
+    "ending_cash": "최종 현금", "ending_shares": "최종 보유수량",
+    "ending_avg": "최종 평균단가",
+    "effective_start_date": "실제 시작일", "effective_end_date": "실제 종료일",
+    "initial_amount": "초기 투자금", "additional_contributions": "추가 납입금",
+    "total_contributions": "총 투입금", "buy_hold_final_value": "장기보유 최종 평가액",
+    "buy_hold_return_pct": "장기보유 수익률", "buy_count": "매수 횟수",
+    "sell_count": "매도 횟수", "position_changes": "포지션 변경 횟수",
+    "confirmation_count": "확인 횟수", "signal_limit_days": "신호 대기일",
+    "ending_position": "최종 포지션", "sharpe": "샤프지수",
+    "sortino": "소르티노지수", "calmar": "칼마지수", "xirr": "내부수익률(XIRR)",
+    "event": "거래 종류", "type": "유형", "contribution": "추가 납입금",
+    "scheduled_date": "예정일", "actual_date": "실제 거래일",
+    "signal_date": "신호일", "regime": "시장 국면", "turnover": "회전율",
+    "fee": "거래비용", "nav": "순자산가치",
+    "Frequency": "측정 주기", "Model": "모형", "CAGR": "연환산 수익률",
+    "MaxDD": "최대 낙폭(MDD)", "Volatility": "변동성",
+    "Sharpe_rf0": "샤프지수", "Sortino": "소르티노지수",
+    "Calmar": "칼마지수", "Start": "시작일", "End": "종료일",
+    "action": "거래 내용", "rate": "환율", "score": "신호 점수",
+    "total_value": "총 평가액", "converted_value": "환전금액",
+    "cash_before": "환전 전 원화", "usd_value_before": "환전 전 달러 평가액",
+    "fear_and_greed_historical": "종합 공포·탐욕 지수",
+    "market_momentum_sp500": "S&P500 시장 모멘텀",
+    "market_volatility_vix": "VIX 시장 변동성",
+}
+
+
+def _label(value: object) -> str:
+    return FUNCTION_LABELS.get(str(value), str(value))
+
+
+def _metric_value(label: object, value: object) -> str:
+    if str(label) == "ending_position":
+        return {"LONG": "투자 중", "STOCK": "투자 중", "CASH": "현금 보유"}.get(
+            str(value), str(value)
+        )
+    return str(value)
+
+
+def _localized_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    output = frame.copy()
+    output.index.name = _label(output.index.name) if output.index.name else output.index.name
+    output = output.rename(columns={column: _label(column) for column in output.columns})
+    if "매수/매도" in output:
+        output["매수/매도"] = output["매수/매도"].replace({"BUY": "매수", "SELL": "매도"})
+    if "거래 종류" in output:
+        output["거래 종류"] = output["거래 종류"].replace({
+            "BUY": "매수", "SELL": "매도", "CONTRIBUTION": "추가 납입",
+        })
+    if "최종 포지션" in output:
+        output["최종 포지션"] = output["최종 포지션"].replace({
+            "LONG": "투자 중", "STOCK": "투자 중", "CASH": "현금 보유",
+        })
+    if "시장 국면" in output:
+        output["시장 국면"] = output["시장 국면"].replace({
+            "reflation": "리플레이션", "goldilocks": "골디락스",
+            "stagflation": "스태그플레이션", "slowdown": "경기 둔화",
+            "cash": "현금",
+        })
+    return output
 
 
 def _date(value: object) -> dt.date:
@@ -86,7 +159,7 @@ def _chart_options(series: dict[str, pd.Series]) -> dict:
             str(index.date() if hasattr(index, "date") else index): round(float(value), 5)
             for index, value in clean.items()
         }
-        output.append({"name": name, "type": "line", "showSymbol": False, "data": [values.get(item) for item in categories]})
+        output.append({"name": _label(name), "type": "line", "showSymbol": False, "data": [values.get(item) for item in categories]})
     return {
         "tooltip": {"trigger": "axis"},
         "legend": {"type": "scroll", "bottom": 0},
@@ -104,8 +177,8 @@ def _render_result(result: ToolResult) -> None:
             for label, value in result.metrics.items():
                 with ui.card().classes("metric-card"):
                     with ui.row().classes("metric-row items-center justify-between no-wrap"):
-                        ui.label(str(label)).classes("metric-label")
-                        ui.label(str(value)).classes("metric-value")
+                        ui.label(_label(label)).classes("metric-label")
+                        ui.label(_metric_value(label, value)).classes("metric-value")
     with ui.tabs().classes("dashboard-tabs w-full") as tabs:
         chart_tab = ui.tab("차트", icon="show_chart")
         detail_tab = ui.tab("세부내역", icon="table_rows")
@@ -118,14 +191,14 @@ def _render_result(result: ToolResult) -> None:
                 ui.label("이 결과에는 차트 자료가 없습니다.").classes("empty-state")
         with ui.tab_panel(detail_tab):
             if not result.table.empty:
-                frame = result.table.copy().tail(500)
+                frame = _localized_frame(result.table).tail(500)
                 frame.columns = [str(column) for column in frame.columns]
                 frame = frame.reset_index(drop=False)
                 frame.columns = [str(column) for column in frame.columns]
                 for column in frame.columns:
                     if pd.api.types.is_datetime64_any_dtype(frame[column]):
                         frame[column] = frame[column].dt.strftime("%Y-%m-%d")
-                rows = frame.astype(object).where(pd.notna(frame), None).to_dict("records")
+                rows = dataframe_records(frame)
                 columns = [{"name": column, "label": column, "field": column, "sortable": True} for column in frame.columns]
                 ui.table(columns=columns, rows=rows, pagination=20).classes("w-full account-table")
             else:
@@ -133,15 +206,20 @@ def _render_result(result: ToolResult) -> None:
         with ui.tab_panel(download_tab):
             with ui.row().classes("gap-3"):
                 if not result.table.empty:
-                    csv_data = result.table.to_csv(index=True).encode("utf-8-sig")
+                    csv_data = _localized_frame(result.table).to_csv(index=True).encode("utf-8-sig")
                     ui.button("CSV 다운로드", icon="download", on_click=lambda: ui.download(csv_data, "result.csv"))
                 if result.series or not result.table.empty:
                     output = io.BytesIO()
                     with pd.ExcelWriter(output, engine="openpyxl") as writer:
                         if result.series:
-                            pd.concat(result.series, axis=1).to_excel(writer, sheet_name="차트 데이터")
+                            pd.concat(
+                                {_label(name): values for name, values in result.series.items()},
+                                axis=1,
+                            ).to_excel(writer, sheet_name="차트 데이터")
                         if not result.table.empty:
-                            result.table.to_excel(writer, sheet_name="세부내역", index=True)
+                            _localized_frame(result.table).to_excel(
+                                writer, sheet_name="세부내역", index=True,
+                            )
                     excel_data = output.getvalue()
                     ui.button("Excel 다운로드", icon="download", on_click=lambda: ui.download(excel_data, "result.xlsx"))
     if result.note:
