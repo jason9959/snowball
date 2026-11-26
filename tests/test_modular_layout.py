@@ -73,8 +73,13 @@ class ModularLayoutTests(unittest.TestCase):
         self.assertIn('target = f"/functions/{feature_id}"', layout)
         self.assertNotIn("streamlit.app", layout)
         route = (ROOT / "features" / "functions_nicegui" / "page.py").read_text(encoding="utf-8")
+        presentation = (ROOT / "common" / "functions" / "presentation.py").read_text(encoding="utf-8")
         self.assertIn('@ui.page("/functions/{feature_id}")', route)
         self.assertIn("TickerPicker", route)
+        self.assertIn("render_tool_result", route)
+        self.assertIn("serialize_tool_result", route)
+        self.assertIn('ui.tab("MDD"', presentation)
+        self.assertIn("drawdown_series", presentation)
         for feature_id in (
             "return_comparison", "periodic_returns", "portfolio_backtest",
             "dynamic_portfolio", "allocation_sweep", "monte_carlo_normal",

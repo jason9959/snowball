@@ -8,7 +8,7 @@ from collections.abc import Callable
 
 import numpy as np
 import pandas as pd
-from nicegui import run, ui
+from nicegui import app, run, ui
 
 from common.functions.analytics import (
     ToolResult,
@@ -17,6 +17,11 @@ from common.functions.analytics import (
     monte_carlo,
     periodic,
     static_portfolio,
+)
+from common.functions.presentation import (
+    deserialize_tool_result,
+    render_tool_result,
+    serialize_tool_result,
 )
 from common.functions.specialized import (
     dollar_compass,
@@ -240,6 +245,7 @@ def _common_dates() -> tuple[ui.input, ui.input]:
 def functions_page(feature_id: str) -> None:
     shell()
     title = TOOLS.get(feature_id)
+    result_storage_key = f"functions_result_v2_{feature_id}"
     with ui.column().classes("page-container w-full gap-4"):
         ui.button("전체 기능", icon="arrow_back", on_click=lambda: ui.navigate.to("/")).props("flat").classes("page-back-button")
         if title is None:
@@ -955,20 +961,28 @@ def functions_page(feature_id: str) -> None:
 
         async def execute() -> None:
             run_button.disable()
-            result_area.clear()
             status.set_text("데이터를 불러와 계산하고 있습니다…")
             try:
                 result = await run.io_bound(getter)
             except Exception as error:
                 status.set_text("계산을 완료하지 못했습니다.")
-                with result_area:
-                    with ui.card().classes("error-card w-full"):
-                        ui.label(str(error)).classes("text-negative")
+                ui.notify(str(error), type="negative", timeout=8000)
             else:
+                app.storage.user[result_storage_key] = serialize_tool_result(result)
+                result_area.clear()
                 with result_area:
-                    _render_result(result)
+                    render_tool_result(result)
                 status.set_text("계산이 완료되었습니다.")
             finally:
                 run_button.enable()
 
         run_button.on("click", execute)
+        stored_result = app.storage.user.get(result_storage_key)
+        if isinstance(stored_result, dict):
+            try:
+                restored_result = deserialize_tool_result(stored_result)
+                with result_area:
+                    render_tool_result(restored_result)
+                status.set_text("직전 계산 결과를 복원했습니다.")
+            except Exception:
+                app.storage.user.pop(result_storage_key, None)
