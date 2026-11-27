@@ -78,6 +78,12 @@ class ModularLayoutTests(unittest.TestCase):
         self.assertIn("TickerPicker", route)
         self.assertIn("render_tool_result", route)
         self.assertIn("serialize_tool_result", route)
+        self.assertIn('"벤치마크 없음": (None, None)', route)
+        self.assertIn('"VOO · Vanguard S&P 500 ETF"', route)
+        self.assertIn('"^GSPC"', route)
+        self.assertIn('"^IXIC"', route)
+        self.assertIn('"^KS11"', route)
+        self.assertIn('"^KQ11"', route)
         self.assertIn('ui.tab("MDD"', presentation)
         self.assertIn("drawdown_series", presentation)
         for feature_id in (

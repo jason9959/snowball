@@ -32,8 +32,8 @@ class FunctionsPresentationTests(unittest.TestCase):
             },
         )
         drawdowns = drawdown_series(result.series)
-        self.assertEqual(list(drawdowns), ["낙폭"])
-        self.assertEqual(drawdowns["낙폭"].tolist(), [0.0, -10.0, 0.0])
+        self.assertEqual(list(drawdowns), ["포트폴리오 낙폭"])
+        self.assertEqual(drawdowns["포트폴리오 낙폭"].tolist(), [0.0, -10.0, 0.0])
 
     def test_drawdown_is_derived_for_positive_performance_series(self):
         dates = pd.bdate_range("2026-01-02", periods=3)

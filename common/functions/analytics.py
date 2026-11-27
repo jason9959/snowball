@@ -128,7 +128,8 @@ def periodic(ticker: str, start: dt.date, end: dt.date, frequency: str) -> ToolR
 def static_portfolio(
     tickers: list[str], weights: list[float], start: dt.date, end: dt.date,
     initial: float, rebalance: str = "매월", contribution: float = 0.0,
-    contribution_frequency: str = "매월",
+    contribution_frequency: str = "매월", benchmark_ticker: str | None = None,
+    benchmark_label: str | None = None,
 ) -> ToolResult:
     frame = prices(tickers, start, end).dropna()
     if frame.empty:
@@ -196,9 +197,42 @@ def static_portfolio(
         "연 변동성": f"{returns.std() * np.sqrt(252) * 100:.2f}%",
         "MDD": f"{drawdown.min() * 100:.2f}%",
     }
+    series = {"포트폴리오": nav, "누적 투입금": invested, "낙폭": drawdown}
+    if benchmark_ticker:
+        benchmark_frame = prices([benchmark_ticker], start, end)
+        if benchmark_frame.empty:
+            raise ValueError(f"벤치마크({benchmark_label or benchmark_ticker}) 가격 데이터가 없습니다.")
+        benchmark_prices = benchmark_frame.iloc[:, 0].reindex(dates).ffill().bfill()
+        if benchmark_prices.isna().any():
+            raise ValueError(f"벤치마크({benchmark_label or benchmark_ticker}) 공통 가격 기간이 없습니다.")
+        benchmark_shares = float(initial) / float(benchmark_prices.iloc[0])
+        benchmark_values = np.empty(len(dates), dtype=float)
+        benchmark_values[0] = float(initial)
+        for index in range(1, len(dates)):
+            if dates[index] in contribution_dates:
+                benchmark_shares += float(contribution) / float(benchmark_prices.iloc[index])
+            benchmark_values[index] = benchmark_shares * float(benchmark_prices.iloc[index])
+        benchmark_nav = pd.Series(benchmark_values, index=dates)
+        benchmark_performance = (
+            1 + ((benchmark_nav - flows) / benchmark_nav.shift(1) - 1).fillna(0.0)
+        ).cumprod()
+        benchmark_drawdown = benchmark_performance / benchmark_performance.cummax() - 1
+        benchmark_name = benchmark_label or benchmark_ticker
+        benchmark_return = (benchmark_nav.iloc[-1] / invested.iloc[-1] - 1) * 100
+        benchmark_cagr = (
+            (benchmark_performance.iloc[-1] / benchmark_performance.iloc[0]) ** (1 / years) - 1
+        ) * 100
+        metrics.update({
+            "벤치마크": benchmark_name,
+            "벤치마크 누적 수익률": f"{benchmark_return:.2f}%",
+            "벤치마크 연환산 수익률": f"{benchmark_cagr:.2f}%",
+            "벤치마크 MDD": f"{benchmark_drawdown.min() * 100:.2f}%",
+        })
+        series[f"벤치마크 · {benchmark_name}"] = benchmark_nav
+        series[f"{benchmark_name} 낙폭"] = benchmark_drawdown
     return ToolResult(
         "정적 포트폴리오", metrics,
-        {"포트폴리오": nav, "누적 투입금": invested, "낙폭": drawdown},
+        series,
         pd.DataFrame(events),
     )
 

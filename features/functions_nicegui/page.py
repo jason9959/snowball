@@ -66,6 +66,16 @@ TOOLS = {
     "reb_statistics": "15. 한국부동산원 부동산 통계",
 }
 
+PORTFOLIO_BENCHMARKS = {
+    "벤치마크 없음": (None, None),
+    "VOO · Vanguard S&P 500 ETF": ("VOO", "VOO"),
+    "QQQ · Invesco QQQ Trust": ("QQQ", "QQQ"),
+    "S&P 500 지수": ("^GSPC", "S&P 500"),
+    "NASDAQ 종합지수": ("^IXIC", "NASDAQ"),
+    "KOSPI 지수": ("^KS11", "KOSPI"),
+    "KOSDAQ 지수": ("^KQ11", "KOSDAQ"),
+}
+
 
 FUNCTION_LABELS = {
     "date": "날짜", "cycle": "사이클", "side": "매수/매도",
@@ -512,6 +522,11 @@ def functions_page(feature_id: str) -> None:
                     initial = ui.number("초기 투자금", value=10_000, min=1)
                     investment_type = ui.select(["거치식", "적립식"], value="거치식", label="투자 방식")
                     rebalance = ui.select(["매일", "매월", "매분기", "매년", "없음"], value="매일", label="리밸런싱 주기")
+                    benchmark = ui.select(
+                        list(PORTFOLIO_BENCHMARKS),
+                        value="VOO · Vanguard S&P 500 ETF",
+                        label="벤치마크",
+                    )
                 with ui.row().classes("backtest-field-grid w-full") as contribution_fields:
                     contribution = ui.number("정기 적립금", value=1000, min=1)
                     contribution_frequency = ui.select(["매월", "매분기", "매년"], value="매월", label="적립 주기")
@@ -534,11 +549,15 @@ def functions_page(feature_id: str) -> None:
                         for ticker, weight in portfolio_picker.weighted_values()
                         if weight > 0
                     ]
+                    benchmark_ticker, benchmark_label = PORTFOLIO_BENCHMARKS[
+                        str(benchmark.value)
+                    ]
                     return static_portfolio(
                         [ticker for ticker, _ in pairs], [weight for _, weight in pairs],
                         _date(start.value), _date(end.value), float(initial.value), str(rebalance.value),
                         float(contribution.value) if str(investment_type.value) == "적립식" else 0.0,
                         str(contribution_frequency.value),
+                        benchmark_ticker, benchmark_label,
                     )
 
                 getter = portfolio_result

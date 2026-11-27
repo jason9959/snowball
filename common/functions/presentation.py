@@ -14,6 +14,7 @@ from common.snowball.serialization import dataframe_records, json_safe
 
 
 LABELS = {
+    "낙폭": "포트폴리오 낙폭",
     "date": "날짜", "cycle": "사이클", "side": "매수/매도",
     "price": "체결가", "amount": "체결금액", "shares": "수량",
     "note": "거래 사유", "Close": "종가", "High": "고가", "Low": "저가",

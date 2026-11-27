@@ -59,6 +59,22 @@ class FunctionsAnalyticsTests(unittest.TestCase):
         self.assertIn("누적 투입금", result.series)
         self.assertGreater(result.series["누적 투입금"].iloc[-1], 10_000)
 
+    def test_static_portfolio_adds_selected_benchmark_and_drawdown(self):
+        with patch("common.functions.analytics.prices", side_effect=self._prices):
+            result = static_portfolio(
+                ["IEF", "GLD"], [60, 40], self.start, self.end, 10_000,
+                "매월", contribution=100, contribution_frequency="매월",
+                benchmark_ticker="SPY", benchmark_label="S&P 500",
+            )
+        self.assertIn("벤치마크 · S&P 500", result.series)
+        self.assertIn("S&P 500 낙폭", result.series)
+        self.assertEqual(result.metrics["벤치마크"], "S&P 500")
+        self.assertIn("벤치마크 MDD", result.metrics)
+        self.assertEqual(
+            result.series["벤치마크 · S&P 500"].index.tolist(),
+            result.series["포트폴리오"].index.tolist(),
+        )
+
     def test_fixed_allocation_and_monte_carlo_options(self):
         with patch("common.functions.analytics.prices", side_effect=self._prices):
             sweep = allocation_sweep(
